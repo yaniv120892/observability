@@ -1,11 +1,14 @@
+import * as Sentry from '@sentry/nextjs';
 import type { Instrumentation } from 'next';
 import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
+import { toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
 import { createDeepHealthRoute, healthRoute } from './health.js';
+import type { ErrorReportCaptureContext } from '../error-report.types.js';
 import type { NextObservability, NextObservabilityOptions } from './observability.types.js';
 
 type RequestErrorArguments = Parameters<Instrumentation.onRequestError>;
@@ -64,7 +67,7 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     },
     reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
-      void captureInSentry({ error, where });
+      captureInSentry({ error, captureContext: toSentryCaptureContext({ where, context }) });
     },
     async notifyOpsAlert(alert) {
       await alerter.alert(alert);
@@ -88,17 +91,15 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
         },
         'unhandled_request_error',
       );
+      captureRequestErrorInSentry([error, request, context]);
       // Awaited rather than deferred: Next asks for every async task here to be awaited, and
       // `after` is not always available in this scope.
-      await Promise.all([
-        captureRequestErrorInSentry([error, request, context]),
-        alerter.alert({
-          alertType: `5xx ${request.method} ${context.routePath}`,
-          title: `5xx on ${request.method} ${path}`,
-          error,
-          context: { routeType: context.routeType },
-        }),
-      ]);
+      await alerter.alert({
+        alertType: `5xx ${request.method} ${context.routePath}`,
+        title: `5xx on ${request.method} ${path}`,
+        error,
+        context: { routeType: context.routeType },
+      });
       await remote?.flush();
     },
     healthRoute,
@@ -157,24 +158,28 @@ function runAfterResponse(task: () => Promise<void>): void {
   }
 }
 
-async function captureInSentry({ error, where }: { error: unknown; where: string }): Promise<void> {
+/**
+ * Synchronous, so the SDK holds the event before `reportError` returns: an import still pending
+ * when a serverless function freezes after its response loses the event with it.
+ */
+function captureInSentry({
+  error,
+  captureContext,
+}: {
+  error: unknown;
+  captureContext: ErrorReportCaptureContext;
+}): void {
   try {
-    const Sentry = await import('@sentry/nextjs');
-    Sentry.captureException(error, { tags: { where } });
+    Sentry.captureException(error, captureContext);
   } catch {
-    // Sentry is optional; the error is already logged.
+    // The error is already logged; reporting must never fail the path that reports.
   }
 }
 
-async function captureRequestErrorInSentry([
-  error,
-  request,
-  context,
-]: RequestErrorArguments): Promise<void> {
+function captureRequestErrorInSentry([error, request, context]: RequestErrorArguments): void {
   try {
-    const Sentry = await import('@sentry/nextjs');
     Sentry.captureRequestError(error, request, context);
   } catch {
-    // Sentry is optional; the error is already logged.
+    // The error is already logged; reporting must never fail the path that reports.
   }
 }

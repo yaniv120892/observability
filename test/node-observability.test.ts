@@ -1,6 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeObservability } from '../src/node/observability.js';
 import { createRecordingFetch, jsonBodyOf } from './fakes/recording-fetch.js';
+
+const capturedExceptions: { error: unknown; hint: unknown }[] = [];
+
+vi.mock('@sentry/node', () => {
+  const integration = () => ({ name: 'stub' });
+  return {
+    initWithoutDefaultIntegrations: () => undefined,
+    eventFiltersIntegration: integration,
+    functionToStringIntegration: integration,
+    linkedErrorsIntegration: integration,
+    dedupeIntegration: integration,
+    nodeContextIntegration: integration,
+    flush: async () => true,
+    captureException: (error: unknown, hint: unknown) => {
+      capturedExceptions.push({ error, hint });
+    },
+  };
+});
+
+beforeEach(() => {
+  capturedExceptions.length = 0;
+});
 
 const environment = {
   NODE_ENV: 'production',
@@ -48,6 +70,32 @@ describe('createNodeObservability', () => {
       telegram: false,
     });
     await observability.shutdown();
+  });
+
+  it('sends the report context to Sentry as extra, and its primitives as tags', async () => {
+    const { fetchImplementation } = createRecordingFetch();
+    const observability = await createNodeObservability({
+      service: 'worker',
+      environment: { SENTRY_DSN: 'https://key@sentry.example/1' },
+      fetchImplementation,
+    });
+    const error = new Error('login failed');
+    observability.reportError({
+      error,
+      where: 'sync_failed',
+      context: { memberId: 'member-7', attempt: 2, cookies: { session: 'x' } },
+    });
+    await observability.shutdown();
+    expect(observability.integrations.sentry).toBe(true);
+    expect(capturedExceptions).toEqual([
+      {
+        error,
+        hint: {
+          tags: { memberId: 'member-7', attempt: 2, where: 'sync_failed' },
+          extra: { memberId: 'member-7', attempt: 2, cookies: { session: 'x' } },
+        },
+      },
+    ]);
   });
 
   it('runs with no integrations configured', async () => {
