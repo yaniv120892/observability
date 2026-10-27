@@ -35,6 +35,21 @@ describe('createNodeObservability', () => {
     expect(jsonBodyOf(requests[1])).toEqual([expect.objectContaining({ msg: 'sync_finished' })]);
   });
 
+  it('reports which integrations are live', async () => {
+    const { fetchImplementation } = createRecordingFetch();
+    const observability = await createNodeObservability({
+      service: 'worker',
+      environment,
+      fetchImplementation,
+    });
+    expect(observability.integrations).toEqual({
+      betterStack: true,
+      sentry: false,
+      telegram: false,
+    });
+    await observability.shutdown();
+  });
+
   it('runs with no integrations configured', async () => {
     const { requests, fetchImplementation } = createRecordingFetch();
     const observability = await createNodeObservability({

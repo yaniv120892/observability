@@ -4,7 +4,7 @@ import { createRecordingFetch, jsonBodyOf } from './fakes/recording-fetch.js';
 const afterTasks: (() => Promise<void>)[] = [];
 const sentryCalls: string[] = [];
 
-vi.mock('next/server', () => ({
+vi.mock('next/server.js', () => ({
   after: (task: () => Promise<void>) => {
     afterTasks.push(task);
   },

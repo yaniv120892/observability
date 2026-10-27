@@ -1,5 +1,7 @@
+export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
+
 export type ObservabilityConfig = {
-  logLevel: string;
+  logLevel: LogLevel;
   environment: string;
   betterStack: { sourceUrl: string; sourceToken: string } | null;
   sentryDsn: string | null;
