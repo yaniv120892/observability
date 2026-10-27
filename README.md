@@ -53,12 +53,12 @@ export async function register(): Promise<void> {
   initSentry();
 }
 
-export const onRequestError: Instrumentation.onRequestError = async (...args) => {
+export const onRequestError: Instrumentation.onRequestError = async (...requestErrorArguments) => {
   if (process.env.NEXT_RUNTIME !== 'nodejs') {
     return;
   }
   const { observability } = await import('@/lib/observability');
-  await observability.onRequestError(...args);
+  await observability.onRequestError(...requestErrorArguments);
 };
 ```
 
@@ -84,8 +84,11 @@ export const GET = observability.createDeepHealthRoute({
 });
 ```
 
-A request that logs a warning flushes its batch from `after`; an error ships at once. A cron calls
-`await observability.pingHeartbeat('BETTERSTACK_HEARTBEAT_SYNC')` when it succeeds.
+A request that logs a warning flushes its batch from `after`; an error ships at once, and the same
+hook keeps the function alive until it lands. A cron calls
+`await observability.pingHeartbeat('BETTERSTACK_HEARTBEAT_SYNC')` when it succeeds, and a path that
+catches an error and returns a fallback calls `observability.reportError({ error, where })` so
+Sentry still sees it.
 
 Alerts are counted per serverless instance by default. An app with Redis caps them across
 instances by passing `alertCounter`:
@@ -103,12 +106,18 @@ createNextObservability({
 import { createNodeObservability } from '@yaniv120892/observability/node';
 
 const observability = await createNodeObservability({ service: 'my-worker' });
-observability.reportError(error, { where: 'sync_failed', memberId });
-await observability.alertOwner({ alertType: 'login', title: 'Login keeps failing' });
-process.on('SIGTERM', () => void observability.shutdown());
+observability.reportError({ error, where: 'sync_failed', context: { memberId } });
+await observability.notifyOpsAlert({ alertType: 'login', title: 'Login keeps failing' });
+await observability.pingHeartbeat('BETTERSTACK_HEARTBEAT_SYNC');
+
+process.once('SIGTERM', async () => {
+  await observability.shutdown();
+  process.exit(0);
+});
 ```
 
-A long-running process ships every record from `info` up, on a timer and at once for errors.
+A long-running process ships every record from `info` up, on a timer, at once for an error, and
+at once when the buffer fills.
 
 ## Release
 

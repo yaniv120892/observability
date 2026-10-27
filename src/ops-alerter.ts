@@ -21,28 +21,14 @@ export function createInMemoryAlertCounter(now: () => number = Date.now): AlertC
   return async function countInMemory({ key, windowSeconds }) {
     const current = now();
     const window = windows.get(key);
-    if (!window || current - window.startedAt >= windowSeconds * 1000) {
+    const isWindowOver = !window || current - window.startedAt >= windowSeconds * 1000;
+    if (isWindowOver) {
       windows.set(key, { startedAt: current, count: 1 });
       return 1;
     }
     window.count += 1;
     return window.count;
   };
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
-  }
-  return error === undefined || error === null ? '' : String(error);
-}
-
-function quotaKey(alertType: string): string {
-  const normalized = alertType
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .slice(0, 80);
-  return `ops-alert:${normalized}`;
 }
 
 /**
@@ -55,52 +41,64 @@ export class OpsAlerter {
   private readonly telegram: { botToken: string; chatId: string } | null;
   private readonly logger: Logger;
   private readonly counter: AlertCounter;
+  private readonly fallbackCounter = createInMemoryAlertCounter();
   private readonly fetchImplementation: typeof fetch;
 
-  constructor(options: OpsAlerterOptions) {
+  public constructor(options: OpsAlerterOptions) {
     this.service = options.service;
     this.telegram = options.telegram;
     this.logger = options.logger;
-    this.counter = options.counter ?? createInMemoryAlertCounter();
+    this.counter = options.counter ?? this.fallbackCounter;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
   }
 
-  public get isEnabled(): boolean {
-    return this.telegram !== null;
-  }
-
   public async alert(alert: OpsAlert): Promise<void> {
+    this.logger.warn(
+      { alertType: alert.alertType, title: alert.title, ...alert.context },
+      'ops_alert',
+    );
     if (!this.telegram) {
       return;
     }
     try {
-      const count = await this.counter({
-        key: quotaKey(alert.alertType),
-        windowSeconds: WINDOW_SECONDS,
-      });
+      const count = await this.count(OpsAlerter.quotaKey(alert.alertType));
       if (count > SUPPRESSION_NOTICE_COUNT) {
         return;
       }
       await sendTelegramMessage({
         ...this.telegram,
-        text:
-          count === SUPPRESSION_NOTICE_COUNT
-            ? this.formatSuppressionNotice(alert.alertType)
-            : this.format(alert),
+        text: this.messageFor({ alert, count }),
         fetchImplementation: this.fetchImplementation,
       });
     } catch (error) {
       // Only the message: a fetch error's cause can carry the request, whose URL holds the token.
       this.logger.error(
-        { reason: errorMessage(error), alertType: alert.alertType },
+        { reason: OpsAlerter.errorMessage(error), alertType: alert.alertType },
         'ops_alert_failed',
       );
     }
   }
 
+  /** A shared store can be the thing that is down, so its outage falls back to this instance's count. */
+  private async count(key: string): Promise<number> {
+    try {
+      return await this.counter({ key, windowSeconds: WINDOW_SECONDS });
+    } catch (error) {
+      this.logger.warn({ reason: OpsAlerter.errorMessage(error) }, 'ops_alert_counter_failed');
+      return this.fallbackCounter({ key, windowSeconds: WINDOW_SECONDS });
+    }
+  }
+
+  private messageFor({ alert, count }: { alert: OpsAlert; count: number }): string {
+    if (count === SUPPRESSION_NOTICE_COUNT) {
+      return this.formatSuppressionNotice(alert.alertType);
+    }
+    return this.format(alert);
+  }
+
   private format({ title, error, context }: OpsAlert): string {
     const lines = [`🚨 [${this.service}] ${title}`];
-    const message = errorMessage(error);
+    const message = OpsAlerter.errorMessage(error);
     if (message) {
       lines.push(message);
     }
@@ -118,5 +116,20 @@ export class OpsAlerter {
       `More than ${ALERTS_PER_HOUR} "${alertType}" alerts this hour.`,
       'Further alerts of this type are dropped until the window resets.',
     ].join('\n');
+  }
+
+  private static errorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return `${error.name}: ${error.message}`;
+    }
+    return error === undefined || error === null ? '' : String(error);
+  }
+
+  private static quotaKey(alertType: string): string {
+    const normalized = alertType
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .slice(0, 80);
+    return `ops-alert:${normalized}`;
   }
 }

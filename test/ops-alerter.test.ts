@@ -2,11 +2,12 @@ import pino from 'pino';
 import { describe, expect, it } from 'vitest';
 import { ALERTS_PER_HOUR, createInMemoryAlertCounter, OpsAlerter } from '../src/ops-alerter.js';
 import { createRecordingFetch, jsonBodyOf } from './fakes/recording-fetch.js';
+import type { RecordedRequest } from './fakes/recording-fetch.types.js';
 
 const telegram = { botToken: 'bot-token', chatId: '42' };
 const silentLogger = pino({ level: 'silent' });
 
-function textOf(request: Parameters<typeof jsonBodyOf>[0]): string {
+function textOf(request: RecordedRequest | undefined): string {
   const body = jsonBodyOf(request);
   if (typeof body !== 'object' || body === null || !('text' in body)) {
     throw new Error('Telegram request had no text');
@@ -94,6 +95,31 @@ describe('OpsAlerter', () => {
     ).resolves.toBeUndefined();
     expect(lines.join('')).toContain('ops_alert_failed');
     expect(lines.join('')).not.toContain('bot-token');
+  });
+});
+
+describe('OpsAlerter when its shared counter is down', () => {
+  it('falls back to counting in this instance and still alerts', async () => {
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const alerter = new OpsAlerter({
+      service: 'my-app',
+      telegram,
+      logger: silentLogger,
+      fetchImplementation,
+      counter: async () => {
+        throw new Error('redis unreachable');
+      },
+    });
+    await alerter.alert({ alertType: 'db', title: 'Database down' });
+    expect(requests).toHaveLength(1);
+  });
+
+  it('logs every alert, sent or not', async () => {
+    const messages: string[] = [];
+    const logger = pino({}, { write: (line: string) => messages.push(JSON.parse(line).msg) });
+    const alerter = new OpsAlerter({ service: 'my-app', telegram: null, logger });
+    await alerter.alert({ alertType: 'db', title: 'Database down' });
+    expect(messages).toEqual(['ops_alert']);
   });
 });
 

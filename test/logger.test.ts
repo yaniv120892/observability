@@ -31,4 +31,10 @@ describe('createLogger', () => {
       setupCode: REDACTED,
     });
   });
+
+  it('redacts a capitalised Authorization header', () => {
+    const { logger, lines } = capture();
+    logger.error({ headers: { Authorization: 'Bearer secret' } }, 'upstream_failed');
+    expect(lines[0]).toMatchObject({ headers: { Authorization: REDACTED } });
+  });
 });

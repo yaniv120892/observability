@@ -1,6 +1,5 @@
 import { vi } from 'vitest';
-
-export type RecordedRequest = { url: string; init: RequestInit | undefined };
+import type { RecordedRequest } from './recording-fetch.types.js';
 
 export function createRecordingFetch(status = 200) {
   const requests: RecordedRequest[] = [];

@@ -1,3 +1,5 @@
+import type { Logger } from 'pino';
+
 export type ProbeStatus = 'ok' | 'fail';
 
 export type DeepHealth = {
@@ -20,3 +22,6 @@ export type DeepHealthOptions = {
   /** A blackholed dependency never rejects; without a timeout the monitor gets a bodiless 504. */
   probeTimeoutMs?: number;
 };
+
+/** The deep-health options plus the logger a failed probe reports to. */
+export type DeepHealthRouteOptions = DeepHealthOptions & { logger: Logger };

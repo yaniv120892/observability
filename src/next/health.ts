@@ -1,14 +1,12 @@
-import { after } from 'next/server';
 import type { Logger } from 'pino';
-import type { DeepHealth, DeepHealthOptions, ProbeStatus } from './health.types.js';
+import type { DeepHealth, DeepHealthRouteOptions, ProbeStatus } from './health.types.js';
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 const DEFAULT_RESULT_TTL_MS = 60_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;
 
 /** Liveness only: a dependency call here would keep a scale-to-zero database awake. */
-export function healthRoute(flushRemoteLogs: () => Promise<void>): Response {
-  after(flushRemoteLogs);
+export function healthRoute(): Response {
   return Response.json({ status: 'ok' }, { headers: NO_STORE });
 }
 
@@ -17,11 +15,7 @@ export function createDeepHealthRoute({
   resultTtlMs = DEFAULT_RESULT_TTL_MS,
   probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
   logger,
-  flushRemoteLogs,
-}: DeepHealthOptions & {
-  logger: Logger;
-  flushRemoteLogs: () => Promise<void>;
-}): () => Promise<Response> {
+}: DeepHealthRouteOptions): () => Promise<Response> {
   let cached: { result: DeepHealth; expiresAt: number } | undefined;
   let inFlight: Promise<DeepHealth> | undefined;
 
@@ -63,7 +57,6 @@ export function createDeepHealthRoute({
   }
 
   return async function deepHealthRoute() {
-    after(flushRemoteLogs);
     const { body, httpStatus } = await currentHealth();
     return Response.json(body, { status: httpStatus, headers: NO_STORE });
   };

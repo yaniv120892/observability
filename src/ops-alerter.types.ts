@@ -7,4 +7,7 @@ export type OpsAlert = {
 };
 
 /** Returns how many alerts of `key` were counted in the current window, this one included. */
-export type AlertCounter = (args: { key: string; windowSeconds: number }) => Promise<number>;
+export type AlertCounter = (countRequest: {
+  key: string;
+  windowSeconds: number;
+}) => Promise<number>;

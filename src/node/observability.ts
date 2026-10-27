@@ -1,16 +1,11 @@
+import type * as SentryNode from '@sentry/node';
 import type { Logger } from 'pino';
 import { loadObservabilityConfig } from '../config.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
-import type {
-  ErrorContext,
-  NodeObservability,
-  NodeObservabilityOptions,
-} from './observability.types.js';
-
-import type * as SentryNode from '@sentry/node';
+import type { NodeObservability, NodeObservabilityOptions } from './observability.types.js';
 
 type SentryModule = typeof SentryNode;
 
@@ -31,9 +26,14 @@ export async function createNodeObservability({
 }: NodeObservabilityOptions): Promise<NodeObservability> {
   const config = loadObservabilityConfig(environment);
   const remote = config.betterStack
-    ? new RemoteLogBuffer({ ...config.betterStack, shipLevel: 'info', fetchImplementation })
+    ? new RemoteLogBuffer({
+        ...config.betterStack,
+        shipLevel: 'info',
+        service,
+        fetchImplementation,
+      })
     : null;
-  const timer = remote ? setInterval(() => void remote.flush(), flushIntervalMs) : null;
+  const timer = remote ? setInterval(() => void remote.flush(), flushIntervalMs) : undefined;
   // The periodic flush must never be what keeps a stopping process alive.
   timer?.unref();
 
@@ -42,7 +42,7 @@ export async function createNodeObservability({
     level: config.logLevel,
     secretKeys,
     destinations: remote
-      ? [process.stdout, { write: (line: string) => shipOrBuffer(remote, line) }]
+      ? [process.stdout, { write: (line: string) => shipOrBuffer({ remote, line }) }]
       : [process.stdout],
   });
   const sentry = await startSentry({
@@ -60,31 +60,50 @@ export async function createNodeObservability({
 
   return {
     logger,
-    reportError(error: unknown, { where, ...context }: ErrorContext) {
+    reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
-      try {
-        sentry?.captureException(error, { tags: { where }, extra: context });
-      } catch {
-        // See the function comment.
-      }
+      captureQuietly({ sentry, error, where, context });
     },
-    async alertOwner(alert) {
-      logger.warn({ alertType: alert.alertType, ...alert.context }, `ops alert: ${alert.title}`);
+    async notifyOpsAlert(alert) {
       await alerter.alert(alert);
     },
-    pingHeartbeat: ({ name, url }) => pingHeartbeat({ name, url, logger, fetchImplementation }),
+    async pingHeartbeat(urlVariableName) {
+      await pingHeartbeat({
+        name: urlVariableName,
+        url: environment[urlVariableName],
+        logger,
+        fetchImplementation,
+      });
+    },
     async shutdown() {
-      if (timer) {
-        clearInterval(timer);
-      }
+      clearInterval(timer);
       await Promise.all([remote?.flush(), sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS)]);
     },
   };
 }
 
-function shipOrBuffer(remote: RemoteLogBuffer, line: string): void {
+function shipOrBuffer({ remote, line }: { remote: RemoteLogBuffer; line: string }): void {
   if (remote.write(line) === 'urgent') {
     void remote.flush();
+  }
+}
+
+/** The error is already logged; a failing Sentry call must not fail the path that reports it. */
+function captureQuietly({
+  sentry,
+  error,
+  where,
+  context,
+}: {
+  sentry: SentryModule | null;
+  error: unknown;
+  where: string;
+  context: Record<string, unknown>;
+}): void {
+  try {
+    sentry?.captureException(error, { tags: { where }, extra: context });
+  } catch {
+    return;
   }
 }
 

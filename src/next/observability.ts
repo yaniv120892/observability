@@ -1,14 +1,14 @@
 import type { Instrumentation } from 'next';
 import { after } from 'next/server';
-import pino from 'pino';
 import { loadObservabilityConfig } from '../config.js';
 import { pingHeartbeat } from '../heartbeat.js';
-import { createLogger, redactedPaths } from '../logger.js';
+import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
-import type { OpsAlert } from '../ops-alerter.types.js';
 import { createDeepHealthRoute, healthRoute } from './health.js';
 import type { NextObservability, NextObservabilityOptions } from './observability.types.js';
+
+type RequestErrorArguments = Parameters<Instrumentation.onRequestError>;
 
 /**
  * An `after` hook that has not run within a function's maximum duration was lost with its
@@ -32,67 +32,57 @@ export function createNextObservability(options: NextObservabilityOptions): Next
   return observability;
 }
 
-function build({
-  service,
-  secretKeys = [],
-  alertCounter,
-}: NextObservabilityOptions): NextObservability {
+function build({ service, secretKeys, alertCounter }: NextObservabilityOptions): NextObservability {
   const config = loadObservabilityConfig();
   const isDevelopment = process.env.NODE_ENV === 'development';
   const remote =
     config.betterStack && !isDevelopment
-      ? new RemoteLogBuffer({ ...config.betterStack, shipLevel: 'warn' })
+      ? new RemoteLogBuffer({ ...config.betterStack, shipLevel: 'warn', service })
       : null;
   const flusher = remote ? new RequestScopedFlusher(remote) : null;
-
   // Not a pino transport in production: its worker thread is unreliable on serverless functions.
-  const logger = isDevelopment
-    ? pino({
-        level: config.logLevel,
-        base: { service },
-        redact: redactedPaths(secretKeys),
-        transport: { target: 'pino-pretty', options: { colorize: true } },
-      })
-    : createLogger({
-        service,
-        level: config.logLevel,
-        secretKeys,
-        destinations: flusher
-          ? [process.stdout, { write: (line: string) => flusher.write(line) }]
-          : [process.stdout],
-      });
-
+  const logger = createLogger({
+    service,
+    level: config.logLevel,
+    secretKeys,
+    pretty: isDevelopment,
+    destinations: flusher
+      ? [process.stdout, { write: (line: string) => flusher.write(line) }]
+      : [process.stdout],
+  });
   const alerter = new OpsAlerter({
     service,
     telegram: config.telegram,
     logger,
     counter: alertCounter,
   });
-  const flushRemoteLogs = async (): Promise<void> => {
-    await flusher?.flush();
-  };
-
-  const notifyOpsAlert = (alert: OpsAlert): Promise<void> => alerter.alert(alert);
 
   return {
     logger,
-    flushRemoteLogs,
-    reportSwallowedError(error, { where, ...context }) {
+    async flushRemoteLogs() {
+      await remote?.flush();
+    },
+    reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
       void captureInSentry({ error, where });
     },
-    notifyOpsAlert,
-    scheduleOpsAlert(alert) {
-      runAfterResponse(() => notifyOpsAlert(alert));
+    async notifyOpsAlert(alert) {
+      await alerter.alert(alert);
     },
-    pingHeartbeat: (envVar) => pingHeartbeat({ name: envVar, url: process.env[envVar], logger }),
+    scheduleOpsAlert(alert) {
+      runAfterResponse(() => alerter.alert(alert));
+    },
+    async pingHeartbeat(urlVariableName) {
+      await pingHeartbeat({ name: urlVariableName, url: process.env[urlVariableName], logger });
+    },
     async onRequestError(error, request, context) {
-      await captureRequestErrorInSentry({ error, request, context });
+      // The query string can carry tokens, and redaction works by field name, not by URL.
+      const [path] = request.path.split('?');
       logger.error(
         {
           err: error,
           method: request.method,
-          path: request.path,
+          path,
           route: context.routePath,
           routeType: context.routeType,
         },
@@ -100,63 +90,46 @@ function build({
       );
       // Awaited rather than deferred: Next asks for every async task here to be awaited, and
       // `after` is not always available in this scope.
-      await notifyOpsAlert({
-        alertType: `5xx ${request.method} ${context.routePath}`,
-        title: `5xx on ${request.method} ${request.path.split('?')[0]}`,
-        error,
-        context: { routeType: context.routeType },
-      });
-      // Last, so the batch includes anything the alert logged.
-      await flushRemoteLogs();
+      await Promise.all([
+        captureRequestErrorInSentry([error, request, context]),
+        alerter.alert({
+          alertType: `5xx ${request.method} ${context.routePath}`,
+          title: `5xx on ${request.method} ${path}`,
+          error,
+          context: { routeType: context.routeType },
+        }),
+      ]);
+      await remote?.flush();
     },
-    healthRoute: () => healthRoute(flushRemoteLogs),
-    createDeepHealthRoute: (deepHealthOptions) =>
-      createDeepHealthRoute({ ...deepHealthOptions, logger, flushRemoteLogs }),
+    healthRoute,
+    createDeepHealthRoute(deepHealthOptions) {
+      return createDeepHealthRoute({ ...deepHealthOptions, logger });
+    },
   };
 }
 
 /**
  * There is no shared route wrapper to flush from, so the first shippable record of a request
- * registers the flush itself; a concurrent request's records ride on the same hook. An error is
- * often followed by the invocation dying, so it goes out at once.
+ * registers an `after` hook itself, and a concurrent request's records ride on the same hook. An
+ * urgent record starts its send at once, and the hook keeps the invocation alive until it lands.
  */
 class RequestScopedFlusher {
   private readonly remote: RemoteLogBuffer;
   private flushScheduledAt: number | null = null;
-  private urgentFlush: Promise<void> | null = null;
 
-  constructor(remote: RemoteLogBuffer) {
+  public constructor(remote: RemoteLogBuffer) {
     this.remote = remote;
   }
 
   public write(line: string): void {
-    switch (this.remote.write(line)) {
-      case 'urgent':
-        this.flushUrgently();
-        break;
-      case 'buffered':
-        this.scheduleFlush();
-        break;
-      default:
-        break;
+    const outcome = this.remote.write(line);
+    if (outcome === 'skipped') {
+      return;
     }
-  }
-
-  public async flush(): Promise<void> {
-    this.flushScheduledAt = null;
-    await this.remote.flush();
-  }
-
-  private flushUrgently(): void {
-    this.urgentFlush ??= this.flushOnce();
-  }
-
-  private async flushOnce(): Promise<void> {
-    try {
-      await this.flush();
-    } finally {
-      this.urgentFlush = null;
+    if (outcome === 'urgent') {
+      void this.remote.flush();
     }
+    this.scheduleFlush();
   }
 
   private scheduleFlush(): void {
@@ -166,7 +139,12 @@ class RequestScopedFlusher {
       return;
     }
     this.flushScheduledAt = Date.now();
-    runAfterResponse(() => this.flush());
+    runAfterResponse(() => this.flushFromHook());
+  }
+
+  private async flushFromHook(): Promise<void> {
+    this.flushScheduledAt = null;
+    await this.remote.flush();
   }
 }
 
@@ -188,19 +166,15 @@ async function captureInSentry({ error, where }: { error: unknown; where: string
   }
 }
 
-async function captureRequestErrorInSentry({
+async function captureRequestErrorInSentry([
   error,
   request,
   context,
-}: {
-  error: unknown;
-  request: Parameters<Instrumentation.onRequestError>[1];
-  context: Parameters<Instrumentation.onRequestError>[2];
-}): Promise<void> {
+]: RequestErrorArguments): Promise<void> {
   try {
     const Sentry = await import('@sentry/nextjs');
     Sentry.captureRequestError(error, request, context);
   } catch {
-    // Sentry is optional; the error is logged next.
+    // Sentry is optional; the error is already logged.
   }
 }

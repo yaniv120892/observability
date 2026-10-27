@@ -14,4 +14,4 @@ permissions:
 
 jobs:
   gate:
-    uses: yaniv120892/dev-config/.github/workflows/node-ci.yml@v0.1.0
+    uses: yaniv120892/dev-config/.github/workflows/node-ci.yml@v0.1.1

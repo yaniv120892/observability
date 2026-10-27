@@ -69,16 +69,38 @@ describe('createNextObservability', () => {
     expect(jsonBodyOf(betterStackRequests()[0])).toHaveLength(2);
   });
 
-  it('ships an error at once, without waiting for the response', async () => {
+  it('ships an error at once and keeps the invocation alive until it lands', async () => {
     const { logger } = freshObservability();
     logger.error('payment_failed');
     await vi.waitFor(() => expect(betterStackRequests()).toHaveLength(1));
-    expect(afterTasks).toHaveLength(0);
+    expect(afterTasks).toHaveLength(1);
+  });
+
+  it('ships an error logged while another send is in flight', async () => {
+    const { logger } = freshObservability();
+    logger.error('first_failure');
+    logger.error('second_failure');
+    await runAfterTasks();
+    const shipped = betterStackRequests().flatMap((request) => {
+      const batch = jsonBodyOf(request);
+      return Array.isArray(batch) ? batch : [];
+    });
+    expect(shipped.map((record) => record.msg)).toEqual(['first_failure', 'second_failure']);
+  });
+
+  it('schedules a fresh hook once the last one is stale', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { logger } = freshObservability();
+    logger.warn('first');
+    vi.setSystemTime(Date.now() + 61_000);
+    logger.warn('second');
+    vi.useRealTimers();
+    expect(afterTasks).toHaveLength(2);
   });
 
   it('reports a swallowed error to Sentry and the log', async () => {
-    const { reportSwallowedError } = freshObservability();
-    reportSwallowedError(new Error('cache down'), { where: 'cache_read_failed' });
+    const { reportError } = freshObservability();
+    reportError({ error: new Error('cache down'), where: 'cache_read_failed' });
     await vi.waitFor(() => expect(sentryCalls).toEqual(['captureException']));
     await vi.waitFor(() => expect(betterStackRequests()).toHaveLength(1));
   });
@@ -99,6 +121,13 @@ describe('createNextObservability', () => {
     expect(sentryCalls).toEqual(['captureRequestError']);
     const alert = jsonBodyOf(telegramRequests()[0]);
     expect(alert).toMatchObject({ text: expect.stringContaining('5xx on GET /api/items\n') });
+    const errorRecord = betterStackRequests()
+      .flatMap((request) => {
+        const batch = jsonBodyOf(request);
+        return Array.isArray(batch) ? batch : [];
+      })
+      .find((record) => record.msg === 'unhandled_request_error');
+    expect(errorRecord).toMatchObject({ path: '/api/items' });
     expect(betterStackRequests().length).toBeGreaterThanOrEqual(1);
   });
 });
