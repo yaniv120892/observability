@@ -3,6 +3,7 @@ import { createRecordingFetch, jsonBodyOf } from './fakes/recording-fetch.js';
 
 const afterTasks: (() => Promise<void>)[] = [];
 const sentryCalls: string[] = [];
+const capturedExceptions: { error: unknown; hint: unknown }[] = [];
 
 vi.mock('next/server.js', () => ({
   after: (task: () => Promise<void>) => {
@@ -10,7 +11,10 @@ vi.mock('next/server.js', () => ({
   },
 }));
 vi.mock('@sentry/nextjs', () => ({
-  captureException: () => sentryCalls.push('captureException'),
+  captureException: (error: unknown, hint: unknown) => {
+    sentryCalls.push('captureException');
+    capturedExceptions.push({ error, hint });
+  },
   captureRequestError: () => sentryCalls.push('captureRequestError'),
 }));
 
@@ -37,6 +41,7 @@ const telegramRequests = () =>
 beforeEach(() => {
   afterTasks.length = 0;
   sentryCalls.length = 0;
+  capturedExceptions.length = 0;
   recording = createRecordingFetch();
   vi.stubGlobal('fetch', recording.fetchImplementation);
   vi.stubEnv('NODE_ENV', 'production');
@@ -103,6 +108,80 @@ describe('createNextObservability', () => {
     reportError({ error: new Error('cache down'), where: 'cache_read_failed' });
     await vi.waitFor(() => expect(sentryCalls).toEqual(['captureException']));
     await vi.waitFor(() => expect(betterStackRequests()).toHaveLength(1));
+  });
+
+  it('hands the error to Sentry before reportError returns', () => {
+    const { reportError } = freshObservability();
+    reportError({ error: new Error('cache down'), where: 'cache_read_failed' });
+    expect(sentryCalls).toEqual(['captureException']);
+  });
+
+  it('sends the report context to Sentry as extra, and its primitives as tags', () => {
+    const { reportError } = freshObservability();
+    const error = new Error('lookup failed');
+    reportError({
+      error,
+      where: 'item_lookup_failed',
+      context: { method: 'GET', route: '/api/items', attempt: 2, retried: false, ids: [1, 2] },
+    });
+    expect(capturedExceptions).toEqual([
+      {
+        error,
+        hint: {
+          tags: {
+            method: 'GET',
+            route: '/api/items',
+            attempt: 2,
+            retried: false,
+            where: 'item_lookup_failed',
+          },
+          extra: { method: 'GET', route: '/api/items', attempt: 2, retried: false, ids: [1, 2] },
+        },
+      },
+    ]);
+  });
+
+  it('censors secret keys in what reaches Sentry, as the logger does', () => {
+    serviceIndex += 1;
+    const { reportError } = createNextObservability({
+      service: `next-app-${serviceIndex}`,
+      secretKeys: ['apiKey'],
+    });
+    reportError({
+      error: new Error('x'),
+      where: 'upstream_failed',
+      context: { token: 'plain-token', apiKey: 'plain-key', upstream: { authorization: 'Bearer' } },
+    });
+    expect(capturedExceptions[0]?.hint).toEqual({
+      tags: { where: 'upstream_failed' },
+      extra: {
+        token: '[redacted]',
+        apiKey: '[redacted]',
+        upstream: { authorization: '[redacted]' },
+      },
+    });
+  });
+
+  it('tags only values Sentry accepts, and keeps class instances whole in extra', () => {
+    const { reportError } = freshObservability();
+    const cause = new Error('inner');
+    const at = new Date(0);
+    const longBody = 'x'.repeat(201);
+    reportError({
+      error: new Error('x'),
+      where: 'upstream_failed',
+      context: { status: 502, body: longBody, message: 'line1\nline2', nested: { cause, at } },
+    });
+    expect(capturedExceptions[0]?.hint).toEqual({
+      tags: { status: 502, where: 'upstream_failed' },
+      extra: { status: 502, body: longBody, message: 'line1\nline2', nested: { cause, at } },
+    });
+  });
+
+  it('keeps where as the where tag when the context carries the same key', () => {
+    const { reportError } = freshObservability();
+    reportError({ error: new Error('x'), where: 'caught_here', context: { where: 'elsewhere' } });
+    expect(capturedExceptions[0]?.hint).toMatchObject({ tags: { where: 'caught_here' } });
   });
 
   it('turns an unhandled request error into Sentry, a log and a 5xx alert', async () => {

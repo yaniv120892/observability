@@ -16,11 +16,11 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.1.1 pino
+npm install github:yaniv120892/observability#v0.1.2 pino
 ```
 
-A Next.js app also installs `@sentry/nextjs` (and `pino-pretty` for readable dev logs); a Node
-service installs `@sentry/node` if it reports to Sentry.
+A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
+for readable dev logs; a Node service installs `@sentry/node` if it reports to Sentry.
 
 ## Environment
 
@@ -87,8 +87,10 @@ export const GET = observability.createDeepHealthRoute({
 A request that logs a warning flushes its batch from `after`; an error ships at once, and the same
 hook keeps the function alive until it lands. A cron calls
 `await observability.pingHeartbeat('BETTERSTACK_HEARTBEAT_SYNC')` when it succeeds, and a path that
-catches an error and returns a fallback calls `observability.reportError({ error, where })` so
-Sentry still sees it.
+catches an error and returns a fallback calls `observability.reportError({ error, where, context })`
+so Sentry still sees it. In both entries, `context` reaches Sentry as `extra`, and its string,
+number and boolean values also as tags, next to the `where` tag, with the logger's secret keys
+redacted the same way.
 
 Alerts are counted per serverless instance by default. An app with Redis caps them across
 instances by passing `alertCounter`:
