@@ -1,0 +1,9 @@
+{
+  "extends": "@yaniv120892/dev-config/tsconfig/library.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "jsx": "preserve",
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}
