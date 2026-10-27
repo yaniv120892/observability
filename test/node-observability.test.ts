@@ -83,7 +83,7 @@ describe('createNodeObservability', () => {
     observability.reportError({
       error,
       where: 'sync_failed',
-      context: { memberId: 'member-7', attempt: 2, cookies: { session: 'x' } },
+      context: { memberId: 'member-7', attempt: 2, session: { cookie: 'sid=x' }, token: 'x' },
     });
     await observability.shutdown();
     expect(observability.integrations.sentry).toBe(true);
@@ -92,7 +92,12 @@ describe('createNodeObservability', () => {
         error,
         hint: {
           tags: { memberId: 'member-7', attempt: 2, where: 'sync_failed' },
-          extra: { memberId: 'member-7', attempt: 2, cookies: { session: 'x' } },
+          extra: {
+            memberId: 'member-7',
+            attempt: 2,
+            session: { cookie: '[redacted]' },
+            token: '[redacted]',
+          },
         },
       },
     ]);

@@ -1,17 +1,13 @@
 import * as Sentry from '@sentry/nextjs';
-import type { Instrumentation } from 'next';
 import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
-import { toSentryCaptureContext } from '../error-report.js';
+import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
 import { createDeepHealthRoute, healthRoute } from './health.js';
-import type { ErrorReportCaptureContext } from '../error-report.types.js';
 import type { NextObservability, NextObservabilityOptions } from './observability.types.js';
-
-type RequestErrorArguments = Parameters<Instrumentation.onRequestError>;
 
 /**
  * An `after` hook that has not run within a function's maximum duration was lost with its
@@ -67,7 +63,11 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     },
     reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
-      captureInSentry({ error, captureContext: toSentryCaptureContext({ where, context }) });
+      // Synchronous, so the SDK holds the event before this returns: an import still pending when
+      // a serverless function freezes after its response loses the event with it.
+      captureQuietly(() =>
+        Sentry.captureException(error, toSentryCaptureContext({ where, context, secretKeys })),
+      );
     },
     async notifyOpsAlert(alert) {
       await alerter.alert(alert);
@@ -91,7 +91,7 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
         },
         'unhandled_request_error',
       );
-      captureRequestErrorInSentry([error, request, context]);
+      captureQuietly(() => Sentry.captureRequestError(error, request, context));
       // Awaited rather than deferred: Next asks for every async task here to be awaited, and
       // `after` is not always available in this scope.
       await alerter.alert({
@@ -155,31 +155,5 @@ function runAfterResponse(task: () => Promise<void>): void {
   } catch {
     // Outside a request scope (start-up, a script) nothing would run the hook.
     void task();
-  }
-}
-
-/**
- * Synchronous, so the SDK holds the event before `reportError` returns: an import still pending
- * when a serverless function freezes after its response loses the event with it.
- */
-function captureInSentry({
-  error,
-  captureContext,
-}: {
-  error: unknown;
-  captureContext: ErrorReportCaptureContext;
-}): void {
-  try {
-    Sentry.captureException(error, captureContext);
-  } catch {
-    // The error is already logged; reporting must never fail the path that reports.
-  }
-}
-
-function captureRequestErrorInSentry([error, request, context]: RequestErrorArguments): void {
-  try {
-    Sentry.captureRequestError(error, request, context);
-  } catch {
-    // The error is already logged; reporting must never fail the path that reports.
   }
 }

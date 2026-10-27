@@ -1,8 +1,7 @@
 import type * as SentryNode from '@sentry/node';
 import type { Logger } from 'pino';
-import type { ErrorReportCaptureContext } from '../error-report.types.js';
 import { loadObservabilityConfig } from '../config.js';
-import { toSentryCaptureContext } from '../error-report.js';
+import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
@@ -69,7 +68,11 @@ export async function createNodeObservability({
     },
     reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
-      captureQuietly({ sentry, error, captureContext: toSentryCaptureContext({ where, context }) });
+      if (sentry) {
+        captureQuietly(() =>
+          sentry.captureException(error, toSentryCaptureContext({ where, context, secretKeys })),
+        );
+      }
     },
     async notifyOpsAlert(alert) {
       await alerter.alert(alert);
@@ -92,23 +95,6 @@ export async function createNodeObservability({
 function shipOrBuffer({ remote, line }: { remote: RemoteLogBuffer; line: string }): void {
   if (remote.write(line) === 'urgent') {
     void remote.flush();
-  }
-}
-
-/** The error is already logged; a failing Sentry call must not fail the path that reports it. */
-function captureQuietly({
-  sentry,
-  error,
-  captureContext,
-}: {
-  sentry: SentryModule | null;
-  error: unknown;
-  captureContext: ErrorReportCaptureContext;
-}): void {
-  try {
-    sentry?.captureException(error, captureContext);
-  } catch {
-    return;
   }
 }
 

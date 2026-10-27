@@ -17,6 +17,9 @@ const DEFAULT_SECRET_KEYS = [
 
 export const REDACTED = '[redacted]';
 
+/** Matches the `key`, `*.key` and `*.*.key` paths the logger redacts. */
+const REDACTION_DEPTH = 3;
+
 type CreateLoggerOptions = {
   service: string;
   level: string;
@@ -43,11 +46,7 @@ export function createLogger({
     level,
     base: { service },
     redact: {
-      paths: [...DEFAULT_SECRET_KEYS, ...secretKeys].flatMap((key) => [
-        key,
-        `*.${key}`,
-        `*.*.${key}`,
-      ]),
+      paths: allSecretKeys(secretKeys).flatMap((key) => [key, `*.${key}`, `*.*.${key}`]),
       censor: REDACTED,
     },
   };
@@ -67,4 +66,69 @@ export function createLogger({
     options,
     pino.multistream(destinations.map((stream) => ({ stream, level: 'trace' }))),
   );
+}
+
+/**
+ * A copy of `context` with the logger's secret keys censored at the same depths, for a sink that
+ * does not go through pino, such as a Sentry event.
+ */
+export function redactSecrets({
+  context,
+  secretKeys = [],
+}: {
+  context: Record<string, unknown>;
+  secretKeys?: string[];
+}): Record<string, unknown> {
+  return redactEntries({ object: context, keys: new Set(allSecretKeys(secretKeys)), depth: 0 });
+}
+
+function allSecretKeys(secretKeys: string[]): string[] {
+  return [...DEFAULT_SECRET_KEYS, ...secretKeys];
+}
+
+function redactEntries({
+  object,
+  keys,
+  depth,
+}: {
+  object: object;
+  keys: Set<string>;
+  depth: number;
+}): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(object).map(([key, value]) => [
+      key,
+      keys.has(key) ? REDACTED : redactNested({ value, keys, depth: depth + 1 }),
+    ]),
+  );
+}
+
+function redactNested({
+  value,
+  keys,
+  depth,
+}: {
+  value: unknown;
+  keys: Set<string>;
+  depth: number;
+}): unknown {
+  if (depth >= REDACTION_DEPTH) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item: unknown) => redactNested({ value: item, keys, depth: depth + 1 }));
+  }
+  // A Date, Error or URL keeps its class, so Sentry still serializes it as one.
+  if (isPlainObject(value)) {
+    return redactEntries({ object: value, keys, depth });
+  }
+  return value;
+}
+
+function isPlainObject(value: unknown): value is object {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

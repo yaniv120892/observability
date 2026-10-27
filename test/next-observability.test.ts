@@ -141,6 +141,43 @@ describe('createNextObservability', () => {
     ]);
   });
 
+  it('censors secret keys in what reaches Sentry, as the logger does', () => {
+    serviceIndex += 1;
+    const { reportError } = createNextObservability({
+      service: `next-app-${serviceIndex}`,
+      secretKeys: ['apiKey'],
+    });
+    reportError({
+      error: new Error('x'),
+      where: 'upstream_failed',
+      context: { token: 'plain-token', apiKey: 'plain-key', upstream: { authorization: 'Bearer' } },
+    });
+    expect(capturedExceptions[0]?.hint).toEqual({
+      tags: { where: 'upstream_failed' },
+      extra: {
+        token: '[redacted]',
+        apiKey: '[redacted]',
+        upstream: { authorization: '[redacted]' },
+      },
+    });
+  });
+
+  it('tags only values Sentry accepts, and keeps class instances whole in extra', () => {
+    const { reportError } = freshObservability();
+    const cause = new Error('inner');
+    const at = new Date(0);
+    const longBody = 'x'.repeat(201);
+    reportError({
+      error: new Error('x'),
+      where: 'upstream_failed',
+      context: { status: 502, body: longBody, message: 'line1\nline2', nested: { cause, at } },
+    });
+    expect(capturedExceptions[0]?.hint).toEqual({
+      tags: { status: 502, where: 'upstream_failed' },
+      extra: { status: 502, body: longBody, message: 'line1\nline2', nested: { cause, at } },
+    });
+  });
+
   it('keeps where as the where tag when the context carries the same key', () => {
     const { reportError } = freshObservability();
     reportError({ error: new Error('x'), where: 'caught_here', context: { where: 'elsewhere' } });
