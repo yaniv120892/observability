@@ -1,5 +1,5 @@
 import type { Instrumentation } from 'next';
-import { after } from 'next/server';
+import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
