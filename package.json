@@ -1,6 +1,6 @@
 {
   "name": "@yaniv120892/observability",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Logging (pino to Better Stack), Sentry, heartbeats and Telegram ops alerts for my apps",
   "license": "MIT",
   "type": "module",

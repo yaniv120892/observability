@@ -60,6 +60,11 @@ export async function createNodeObservability({
 
   return {
     logger,
+    integrations: {
+      betterStack: remote !== null,
+      sentry: sentry !== null,
+      telegram: config.telegram !== null,
+    },
     reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
       captureQuietly({ sentry, error, where, context });

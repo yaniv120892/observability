@@ -16,7 +16,7 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.1.0 pino
+npm install github:yaniv120892/observability#v0.1.1 pino
 ```
 
 A Next.js app also installs `@sentry/nextjs` (and `pino-pretty` for readable dev logs); a Node

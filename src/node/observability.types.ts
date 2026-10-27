@@ -2,8 +2,16 @@ import type { Logger } from 'pino';
 import type { ErrorReport } from '../error-report.types.js';
 import type { AlertCounter, OpsAlert } from '../ops-alerter.types.js';
 
+/** Which integrations are live: Sentry counts only once its SDK has started. */
+export type ActiveIntegrations = {
+  betterStack: boolean;
+  sentry: boolean;
+  telegram: boolean;
+};
+
 export type NodeObservability = {
   logger: Logger;
+  integrations: ActiveIntegrations;
   /** Logs the error and, when Sentry is on, sends it there tagged with where it was caught. */
   reportError(report: ErrorReport): void;
   notifyOpsAlert(alert: OpsAlert): Promise<void>;
