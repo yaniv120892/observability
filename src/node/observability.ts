@@ -1,13 +1,20 @@
 import type * as SentryNode from '@sentry/node';
 import type { Logger } from 'pino';
 import { loadObservabilityConfig } from '../config.js';
+import { withholdEventMessages } from '../error-message.js';
+import type { ErrorMessage } from '../error-message.types.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
+import { checkLiveness, createDeepHealthCheck } from '../health.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
 import { scrubRequestUrls } from '../sentry-breadcrumbs.js';
-import type { NodeObservability, NodeObservabilityOptions } from './observability.types.js';
+import type {
+  NodeObservability,
+  NodeObservabilityOptions,
+  WaitUntil,
+} from './observability.types.js';
 
 type SentryModule = typeof SentryNode;
 
@@ -15,41 +22,47 @@ const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const SENTRY_FLUSH_TIMEOUT_MS = 2000;
 
 /**
- * For a long-running Node process. Every integration is inert until its variables are set, and
- * every method resolves rather than throws: reporting must never fail the path that reports.
+ * For a long-running Node process, or with `mode: 'serverless'` for one that runs as a function.
+ * Every integration is inert until its variables are set, and every method resolves rather than
+ * throws: reporting must never fail the path that reports.
  */
-export async function createNodeObservability({
-  service,
-  environment = process.env,
-  secretKeys,
-  alertCounter,
-  flushIntervalMs = DEFAULT_FLUSH_INTERVAL_MS,
-  fetchImplementation = fetch,
-}: NodeObservabilityOptions): Promise<NodeObservability> {
+export async function createNodeObservability(
+  options: NodeObservabilityOptions,
+): Promise<NodeObservability> {
+  const {
+    service,
+    environment = process.env,
+    secretKeys,
+    alertCounter,
+    errorMessage,
+    fetchImplementation = fetch,
+  } = options;
+  const isServerless = options.mode === 'serverless';
+  const keepAlive = keepAliveWith(isServerless ? options.waitUntil : undefined);
   const config = loadObservabilityConfig(environment);
   const remote = config.betterStack
     ? new RemoteLogBuffer({
         ...config.betterStack,
-        shipLevel: 'info',
+        shipLevel: options.shipLevel ?? (isServerless ? 'warn' : 'info'),
         service,
         fetchImplementation,
       })
     : null;
-  const timer = remote ? setInterval(() => void remote.flush(), flushIntervalMs) : undefined;
-  // The periodic flush must never be what keeps a stopping process alive.
-  timer?.unref();
+  const timer = startFlushTimer({ remote, options });
 
   const logger = createLogger({
     service,
     level: config.logLevel,
     secretKeys,
+    errorMessage,
     destinations: remote
-      ? [process.stdout, { write: (line: string) => shipOrBuffer({ remote, line }) }]
+      ? [process.stdout, { write: (line: string) => shipOrBuffer({ remote, line, keepAlive }) }]
       : [process.stdout],
   });
   const sentry = await startSentry({
     dsn: config.sentryDsn,
     environment: config.environment,
+    errorMessage,
     logger,
   });
   const alerter = new OpsAlerter({
@@ -57,6 +70,7 @@ export async function createNodeObservability({
     telegram: config.telegram,
     logger,
     counter: alertCounter,
+    errorMessage,
     fetchImplementation,
   });
 
@@ -67,12 +81,18 @@ export async function createNodeObservability({
       sentry: sentry !== null,
       telegram: config.telegram !== null,
     },
+    async flushRemoteLogs() {
+      await remote?.flush();
+    },
     reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
       if (sentry) {
         captureQuietly(() =>
           sentry.captureException(error, toSentryCaptureContext({ where, context, secretKeys })),
         );
+        if (isServerless) {
+          keepAlive(sentry.flush(SENTRY_FLUSH_TIMEOUT_MS));
+        }
       }
     },
     async notifyOpsAlert(alert) {
@@ -86,6 +106,10 @@ export async function createNodeObservability({
         fetchImplementation,
       });
     },
+    checkLiveness,
+    createDeepHealthCheck(deepHealthOptions) {
+      return createDeepHealthCheck({ ...deepHealthOptions, logger });
+    },
     async shutdown() {
       clearInterval(timer);
       await Promise.all([remote?.flush(), sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS)]);
@@ -93,9 +117,50 @@ export async function createNodeObservability({
   };
 }
 
-function shipOrBuffer({ remote, line }: { remote: RemoteLogBuffer; line: string }): void {
+function startFlushTimer({
+  remote,
+  options,
+}: {
+  remote: RemoteLogBuffer | null;
+  options: NodeObservabilityOptions;
+}): NodeJS.Timeout | undefined {
+  if (!remote || options.mode === 'serverless') {
+    return undefined;
+  }
+  const timer = setInterval(
+    () => void remote.flush(),
+    options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS,
+  );
+  // The periodic flush must never be what keeps a stopping process alive.
+  timer.unref();
+  return timer;
+}
+
+/** Without `waitUntil` the send still starts; it only has nothing holding the function open. */
+function keepAliveWith(waitUntil: WaitUntil | undefined): WaitUntil {
+  return function keepAlive(promise) {
+    if (!waitUntil) {
+      return;
+    }
+    try {
+      waitUntil(promise);
+    } catch {
+      // Outside a request scope there is no invocation to extend.
+    }
+  };
+}
+
+function shipOrBuffer({
+  remote,
+  line,
+  keepAlive,
+}: {
+  remote: RemoteLogBuffer;
+  line: string;
+  keepAlive: WaitUntil;
+}): void {
   if (remote.write(line) === 'urgent') {
-    void remote.flush();
+    keepAlive(remote.flush());
   }
 }
 
@@ -103,10 +168,12 @@ function shipOrBuffer({ remote, line }: { remote: RemoteLogBuffer; line: string 
 async function startSentry({
   dsn,
   environment,
+  errorMessage,
   logger,
 }: {
   dsn: string | null;
   environment: string;
+  errorMessage: ErrorMessage | undefined;
   logger: Logger;
 }): Promise<SentryModule | null> {
   if (!dsn) {
@@ -127,6 +194,10 @@ async function startSentry({
       },
       // No integration here records requests yet; this keeps one added later from leaking URLs.
       beforeBreadcrumb: scrubRequestUrls,
+      ...(errorMessage && {
+        beforeSend: (event, hint) =>
+          withholdEventMessages({ event, originalException: hint.originalException, errorMessage }),
+      }),
       integrations: [
         sentry.eventFiltersIntegration(),
         sentry.functionToStringIntegration(),

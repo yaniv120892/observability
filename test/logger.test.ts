@@ -37,4 +37,30 @@ describe('createLogger', () => {
     logger.error({ headers: { Authorization: 'Bearer secret' } }, 'upstream_failed');
     expect(lines[0]).toMatchObject({ headers: { Authorization: REDACTED } });
   });
+
+  it('withholds an error message from the line, its stack and its causes', () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = createLogger({
+      service: 'my-app',
+      level: 'info',
+      errorMessage: (error) => `${error.name}; message withheld`,
+      destinations: [{ write: (line: string) => lines.push(JSON.parse(line)) }],
+    });
+    const cause = new TypeError('Failing row contains (7, dana@example.com)');
+    logger.error({ err: new Error('dana@example.com', { cause }) }, 'insert_failed');
+    expect(JSON.stringify(lines[0])).not.toContain('dana@example.com');
+    expect(lines[0]).toMatchObject({
+      err: {
+        type: 'Error',
+        message: 'Error; message withheld: TypeError; message withheld',
+        stack: expect.stringContaining('caused by: TypeError: TypeError; message withheld'),
+      },
+    });
+  });
+
+  it('logs the raw message when no errorMessage is given', () => {
+    const { logger, lines } = capture();
+    logger.error({ err: new Error('Failing row contains (7)') }, 'insert_failed');
+    expect(lines[0]).toMatchObject({ err: { message: 'Failing row contains (7)' } });
+  });
 });

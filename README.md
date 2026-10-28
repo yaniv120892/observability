@@ -17,7 +17,7 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.1.4 pino
+npm install github:yaniv120892/observability#v0.1.5 pino
 ```
 
 A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
@@ -125,7 +125,85 @@ process.once('SIGTERM', async () => {
 ```
 
 A long-running process ships every record from `info` up, on a timer, at once for an error, and
-at once when the buffer fills.
+at once when the buffer fills. Pass `shipLevel` to change where shipping starts.
+
+## Serverless Node (Express on a function)
+
+A function is frozen between invocations, so a timer never fires and a send nobody waits for is
+lost. `mode: 'serverless'` starts no timer and ships from `warn` up by default; the app awaits
+`flushRemoteLogs()` at the end of each invocation's work, and `waitUntil` keeps the function alive
+for an error's immediate send and for the Sentry send of `reportError`. The `/node` entry loads
+through `require()` from a CommonJS build (Node 22.12 and later), and nothing in it needs `next`.
+
+```ts
+import { waitUntil } from '@vercel/functions';
+import { HEALTH_RESPONSE_HEADERS } from '@yaniv120892/observability';
+import { createNodeObservability } from '@yaniv120892/observability/node';
+import express from 'express';
+
+const observabilityReady = createNodeObservability({
+  service: 'my-agent',
+  mode: 'serverless',
+  waitUntil,
+});
+
+const app = express();
+
+app.post('/jobs', async (request, response) => {
+  const observability = await observabilityReady;
+  response.status(202).json({ accepted: true });
+  waitUntil(runJob({ observability, body: request.body }));
+});
+
+async function runJob({ observability, body }: RunJobInput): Promise<void> {
+  try {
+    await processJob(body);
+  } catch (error) {
+    observability.reportError({ error, where: 'job_failed' });
+  } finally {
+    await observability.flushRemoteLogs();
+  }
+}
+```
+
+Health routes come back as a status and a body, so any server can send them:
+
+```ts
+app.get('/api/health', async (_request, response) => {
+  const { httpStatus, body } = (await observabilityReady).checkLiveness();
+  response.status(httpStatus).set(HEALTH_RESPONSE_HEADERS).json(body);
+});
+
+const checkDeepHealth = observabilityReady.then((observability) =>
+  observability.createDeepHealthCheck({ probes: { redis: () => redis.ping() } }),
+);
+app.get('/api/health/deep', async (_request, response) => {
+  const { httpStatus, body } = await (await checkDeepHealth)();
+  response.status(httpStatus).set(HEALTH_RESPONSE_HEADERS).json(body);
+});
+```
+
+The same checks are exported from the root entry as `checkLiveness` and `createDeepHealthCheck`
+(which takes a `logger`), for code that has no observability object.
+
+## Withholding error messages
+
+Some error messages quote the data that failed: a Prisma error quotes the query's arguments, and a
+failed check constraint quotes the whole row. `errorMessage` rewrites an error's message, inside
+its stack and its causes too, wherever the package sends it — the `err` field of every log line,
+every Sentry event, and ops alerts. It defaults to the message unchanged.
+
+```ts
+import { withholdPrismaMessages } from '@yaniv120892/observability';
+
+createNodeObservability({ service: 'my-worker', errorMessage: withholdPrismaMessages });
+createNextObservability({ service: 'my-app', errorMessage: withholdPrismaMessages });
+```
+
+A Next app also passes it to `initSentry({ errorMessage: withholdPrismaMessages })` in
+`instrumentation.ts`, so the events Sentry captures by itself are rewritten too; the Node entry
+starts Sentry itself and covers them already. `createLogger` takes the same option. Only the
+message is rewritten: other fields of the error, such as Prisma's `meta`, are logged as they are.
 
 ## Release
 

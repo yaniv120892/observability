@@ -90,6 +90,23 @@ describe('initSentry', () => {
     expect(sentEvents[0]?.contexts?.nextjs?.request_path).toBe('/receipts');
   });
 
+  it("withholds error messages from the SDK's own captures", async () => {
+    initSentry({ errorMessage: (error) => `${error.name}; message withheld` });
+    const sentEvents: Sentry.Event[] = [];
+    Sentry.getClient()?.on('beforeSendEvent', (event) => {
+      sentEvents.push(event);
+    });
+    Sentry.captureRequestError(
+      new Error('Failing row contains (7, dana@example.com)'),
+      { path: '/receipts', method: 'POST', headers: {} },
+      { routerKind: 'App Router', routePath: '/receipts', routeType: 'route' },
+    );
+    await vi.waitFor(() => expect(sentEvents).toHaveLength(1));
+    expect(sentEvents[0]?.exception?.values?.map(({ value }) => value)).toEqual([
+      'Error; message withheld',
+    ]);
+  });
+
   it('records no span even when an incoming trace header says the trace was sampled', () => {
     initSentry();
     const sampledTraceHeader = `${'a'.repeat(32)}-${'b'.repeat(16)}-1`;

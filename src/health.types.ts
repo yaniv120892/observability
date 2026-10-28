@@ -2,6 +2,11 @@ import type { Logger } from 'pino';
 
 export type ProbeStatus = 'ok' | 'fail';
 
+export type LivenessHealth = {
+  httpStatus: 200;
+  body: { status: 'ok' };
+};
+
 export type DeepHealth = {
   httpStatus: number;
   body: {
@@ -24,4 +29,4 @@ export type DeepHealthOptions = {
 };
 
 /** The deep-health options plus the logger a failed probe reports to. */
-export type DeepHealthRouteOptions = DeepHealthOptions & { logger: Logger };
+export type DeepHealthCheckOptions = DeepHealthOptions & { logger: Logger };

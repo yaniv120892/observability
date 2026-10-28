@@ -1,6 +1,8 @@
 import * as Sentry from '@sentry/nextjs';
 import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
+import { withholdErrorMessages } from '../error-message.js';
+import type { ErrorMessage } from '../error-message.types.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
@@ -31,7 +33,12 @@ export function createNextObservability(options: NextObservabilityOptions): Next
   return observability;
 }
 
-function build({ service, secretKeys, alertCounter }: NextObservabilityOptions): NextObservability {
+function build({
+  service,
+  secretKeys,
+  alertCounter,
+  errorMessage,
+}: NextObservabilityOptions): NextObservability {
   const config = loadObservabilityConfig();
   const isDevelopment = process.env.NODE_ENV === 'development';
   const remote =
@@ -44,6 +51,7 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     service,
     level: config.logLevel,
     secretKeys,
+    errorMessage,
     pretty: isDevelopment,
     destinations: flusher
       ? [process.stdout, { write: (line: string) => flusher.write(line) }]
@@ -54,7 +62,9 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     telegram: config.telegram,
     logger,
     counter: alertCounter,
+    errorMessage,
   });
+  const forSentry = (error: unknown) => withheldForSentry({ error, errorMessage });
 
   return {
     logger,
@@ -66,7 +76,10 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
       // Synchronous, so the SDK holds the event before this returns: an import still pending when
       // a serverless function freezes after its response loses the event with it.
       captureQuietly(() =>
-        Sentry.captureException(error, toSentryCaptureContext({ where, context, secretKeys })),
+        Sentry.captureException(
+          forSentry(error),
+          toSentryCaptureContext({ where, context, secretKeys }),
+        ),
       );
     },
     async notifyOpsAlert(alert) {
@@ -91,7 +104,7 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
         },
         'unhandled_request_error',
       );
-      captureQuietly(() => Sentry.captureRequestError(error, request, context));
+      captureQuietly(() => Sentry.captureRequestError(forSentry(error), request, context));
       // Awaited rather than deferred: Next asks for every async task here to be awaited, and
       // `after` is not always available in this scope.
       await alerter.alert({
@@ -147,6 +160,17 @@ class RequestScopedFlusher {
     this.flushScheduledAt = null;
     await this.remote.flush();
   }
+}
+
+function withheldForSentry({
+  error,
+  errorMessage,
+}: {
+  error: unknown;
+  errorMessage: ErrorMessage | undefined;
+}): unknown {
+  const shouldWithhold = errorMessage !== undefined && error instanceof Error;
+  return shouldWithhold ? withholdErrorMessages({ error, errorMessage }) : error;
 }
 
 function runAfterResponse(task: () => Promise<void>): void {

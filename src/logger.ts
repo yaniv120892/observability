@@ -1,4 +1,6 @@
 import pino, { type DestinationStream, type Logger } from 'pino';
+import { withholdErrorMessages } from './error-message.js';
+import type { ErrorMessage } from './error-message.types.js';
 
 // Redaction matches keys exactly, so header names appear in both of the cases they arrive in.
 const DEFAULT_SECRET_KEYS = [
@@ -28,6 +30,8 @@ type CreateLoggerOptions = {
   secretKeys?: string[];
   /** Human-readable output through pino-pretty, for a local dev server. */
   pretty?: boolean;
+  /** Rewrites the message of every error logged as `err`; see `ErrorMessage`. */
+  errorMessage?: ErrorMessage;
 };
 
 /**
@@ -41,6 +45,7 @@ export function createLogger({
   destinations,
   secretKeys = [],
   pretty = false,
+  errorMessage,
 }: CreateLoggerOptions): Logger {
   const options: pino.LoggerOptions = {
     level,
@@ -50,6 +55,14 @@ export function createLogger({
       censor: REDACTED,
     },
   };
+  if (errorMessage) {
+    options.serializers = {
+      err: (value: unknown) =>
+        value instanceof Error
+          ? pino.stdSerializers.err(withholdErrorMessages({ error: value, errorMessage }))
+          : value,
+    };
+  }
   if (pretty) {
     return pino({ ...options, transport: { target: 'pino-pretty', options: { colorize: true } } });
   }
