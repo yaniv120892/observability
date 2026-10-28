@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/nextjs';
 import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
+import { withholdingEventProcessor } from '../error-message.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
@@ -31,7 +32,12 @@ export function createNextObservability(options: NextObservabilityOptions): Next
   return observability;
 }
 
-function build({ service, secretKeys, alertCounter }: NextObservabilityOptions): NextObservability {
+function build({
+  service,
+  secretKeys,
+  alertCounter,
+  errorMessage,
+}: NextObservabilityOptions): NextObservability {
   const config = loadObservabilityConfig();
   const isDevelopment = process.env.NODE_ENV === 'development';
   const remote =
@@ -44,6 +50,7 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     service,
     level: config.logLevel,
     secretKeys,
+    errorMessage,
     pretty: isDevelopment,
     destinations: flusher
       ? [process.stdout, { write: (line: string) => flusher.write(line) }]
@@ -54,7 +61,15 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     telegram: config.telegram,
     logger,
     counter: alertCounter,
+    errorMessage,
   });
+  if (errorMessage) {
+    // On the global scope, so every event the server SDK sends is covered, its own captures
+    // included, whether or not `initSentry` was given the same function.
+    captureQuietly(() =>
+      Sentry.getGlobalScope().addEventProcessor(withholdingEventProcessor(errorMessage)),
+    );
+  }
 
   return {
     logger,
