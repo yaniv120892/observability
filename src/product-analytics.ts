@@ -69,20 +69,15 @@ export class ProductAnalytics {
   }
 
   /**
-   * Sends what is queued beside any send already under way, and resolves once every send has
-   * landed, so a shutdown that flushes during a timer's send still waits for it.
+   * Sends what is queued beside any send already under way, and resolves once those have landed,
+   * so a shutdown that flushes during a timer's send still waits for it. Events captured while it
+   * waits go with the next flush; waiting for them too never ends under steady traffic.
    */
   public async flush(): Promise<void> {
-    while (this.hasUnsentWork()) {
-      if (this.buffer.length > 0) {
-        this.track(this.send(this.takeBatch()));
-      }
-      await Promise.all(this.pendingSends);
+    if (this.buffer.length > 0) {
+      this.track(this.send(this.takeBatch()));
     }
-  }
-
-  private hasUnsentWork(): boolean {
-    return this.buffer.length > 0 || this.pendingSends.size > 0;
+    await Promise.all(this.pendingSends);
   }
 
   private track(send: Promise<void>): void {

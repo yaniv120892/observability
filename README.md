@@ -221,15 +221,16 @@ observability.captureEvent({ event: 'expense_created', userId: user.id });
 ```
 
 Send the app's own opaque user id and the name of the action, nothing else: no email, no name, no
-amount. Events are sent from the server only, so there is no client script and no cookie. In Next
+amount. Name a page load `page_viewed`, with the page as a property: the weekly report counts it as
+a visit rather than an action. Events are sent from the server only, so there is no client script and no cookie. In Next
 they ship after the response; in a Node service, on the flush timer and on `shutdown()`.
 `POSTHOG_HOST` defaults to the EU region, `https://eu.i.posthog.com`.
 
 ### Weekly report
 
 `.github/workflows/weekly-report.yml` runs every Sunday at 09:00 Israel time and sends one Telegram
-message with, per app: active users, new users and actions against the week before, and the top
-users and actions. Events from `development`, `preview` and `test` are left out. It needs the
+message with, per app: active users, new users, visits and actions against the week before, and the top
+users and actions. It needs the
 `POSTHOG_PROJECT_ID` repository variable, a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
 only the `query:read` scope), and the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_ID` secrets.
 Run it now from the Actions tab with **Run workflow**. GitHub turns a schedule off after 60 days
@@ -237,8 +238,8 @@ without a commit to the repository, so give it a Better Stack heartbeat with a p
 put its URL in the optional `BETTERSTACK_HEARTBEAT_WEEKLY_REPORT` secret; a missed Sunday then
 alerts.
 
-A Node service sends events only when `NODE_ENV` (or `VERCEL_ENV`) names a real environment such
-as `production`: unset, it counts as `development` and sends nothing.
+Events are sent only from `production`, read from `VERCEL_ENV`, else `NODE_ENV`. A local run, a
+Vercel preview and a service with neither variable set send nothing, so they spend no quota.
 
 ## Release
 

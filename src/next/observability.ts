@@ -71,11 +71,10 @@ function build({
       Sentry.getGlobalScope().addEventProcessor(withholdingEventProcessor(errorMessage)),
     );
   }
-  const analyticsConfig = isDevelopment ? null : config.productAnalytics;
   const analytics = new ProductAnalytics({
     service,
     environment: config.environment,
-    config: analyticsConfig,
+    config: config.productAnalytics,
     logger,
   });
   const analyticsFlusher = new AfterResponseFlusher(() => analytics.flush());

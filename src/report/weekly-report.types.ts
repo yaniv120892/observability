@@ -6,8 +6,11 @@ export type AppWeek = {
   activeUsers: number;
   previousActiveUsers: number;
   newUsers: number;
+  /** Actions: every event except a page view. */
   events: number;
   previousEvents: number;
+  visits: number;
+  previousVisits: number;
   topUsers: Ranked[];
   topEvents: Ranked[];
 };

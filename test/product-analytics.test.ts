@@ -124,6 +124,21 @@ describe('ProductAnalytics', () => {
     expect(isShutdownFlushDone).toBe(true);
   });
 
+  it('resolves under steady traffic, leaving events captured during its send for the next flush', async () => {
+    const capturing: { analytics?: ProductAnalytics } = {};
+    const fetchImplementation = vi.fn(async () => {
+      capturing.analytics?.capture({ event: 'page_viewed', userId: '42' });
+      return new Response('', { status: 200 });
+    });
+    const { analytics } = createAnalytics({ fetchImplementation });
+    capturing.analytics = analytics;
+    analytics.capture({ event: 'page_viewed', userId: '42' });
+
+    await analytics.flush();
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
   it('says how many events it dropped once the queue overflowed', async () => {
     const { fetchImplementation } = createRecordingFetch();
     const { analytics, warn } = createAnalytics({ fetchImplementation });
