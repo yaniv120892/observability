@@ -72,7 +72,9 @@ initSentry();
 ```
 
 `initSentry` takes an optional `beforeBreadcrumb`, which runs after the package has already cut
-request URLs down to their origin, so it never sees a path or query string.
+request URLs down to their origin. A request breadcrumb reaches it without the SDK's `hint`, which
+holds the raw request, so it never sees a path or query string. No query string is kept on any URL
+Sentry collects.
 
 Health routes for the uptime monitors:
 

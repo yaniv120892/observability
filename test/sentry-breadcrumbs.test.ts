@@ -46,10 +46,37 @@ describe('scrubRequestUrls', () => {
     ).toBe('DELETE https://receipts.s3.amazonaws.com failed');
   });
 
-  it('replaces a URL that does not parse rather than keeping it', () => {
+  it('replaces the request URL in the message even when it is relative', () => {
+    expect(
+      scrubRequestUrls({
+        category: 'fetch',
+        message: 'PUT /users/7/receipt.pdf?sig=abc failed',
+        data: { url: '/users/7/receipt.pdf?sig=abc' },
+      }).message,
+    ).toBe('PUT [url without origin] failed');
+  });
+
+  it('replaces a relative URL outside a browser rather than keeping it', () => {
     expect(
       scrubRequestUrls({ category: 'fetch', data: { url: '/users/7/receipt.pdf' } }).data,
-    ).toEqual({ url: '[unparsable url]' });
+    ).toEqual({ url: '[url without origin]' });
+  });
+
+  it('cuts protocol-relative URLs and keeps the punctuation that follows a URL', () => {
+    expect(
+      scrubRequestUrls({
+        category: 'http',
+        message:
+          'PUT //receipts.s3.amazonaws.com/users/7/receipt.pdf, then (https://api.example/x?y=1).',
+      }).message,
+    ).toBe('PUT [url without origin], then (https://api.example).');
+  });
+
+  it('scrubs a request recorded under a category of its own', () => {
+    expect(
+      scrubRequestUrls({ type: 'http', category: 'storage', data: { url: PRESIGNED_UPLOAD_URL } })
+        .data,
+    ).toEqual({ url: 'https://receipts.s3.amazonaws.com' });
   });
 
   it('leaves a breadcrumb that is not an outgoing request untouched', () => {

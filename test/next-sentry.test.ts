@@ -59,6 +59,37 @@ describe('initSentry', () => {
     expect(recordedBreadcrumbs().map(({ category }) => category)).toEqual(['fetch']);
   });
 
+  it("withholds the SDK's hint, which holds the raw request, from the app's hook", () => {
+    const hintsSeenByApp: unknown[] = [];
+    initSentry({
+      beforeBreadcrumb(breadcrumb, hint) {
+        hintsSeenByApp.push(hint);
+        return breadcrumb;
+      },
+    });
+    Sentry.addBreadcrumb(
+      { category: 'fetch', data: { url: S3_DELETE_URL } },
+      { input: [S3_DELETE_URL, { method: 'DELETE' }] },
+    );
+    Sentry.addBreadcrumb({ category: 'ui.click' }, { event: 'click' });
+    expect(hintsSeenByApp).toEqual([undefined, { event: 'click' }]);
+  });
+
+  it('keeps no query parameter of the request a server error happened on', async () => {
+    initSentry();
+    const sentEvents: Sentry.Event[] = [];
+    Sentry.getClient()?.on('beforeSendEvent', (event) => {
+      sentEvents.push(event);
+    });
+    Sentry.captureRequestError(
+      new Error('render failed'),
+      { path: '/receipts?X-Amz-Signature=f00d&page=2', method: 'GET', headers: {} },
+      { routerKind: 'App Router', routePath: '/receipts', routeType: 'render' },
+    );
+    await vi.waitFor(() => expect(sentEvents).toHaveLength(1));
+    expect(sentEvents[0]?.contexts?.nextjs?.request_path).toBe('/receipts');
+  });
+
   it('records no span even when an incoming trace header says the trace was sampled', () => {
     initSentry();
     const sampledTraceHeader = `${'a'.repeat(32)}-${'b'.repeat(16)}-1`;

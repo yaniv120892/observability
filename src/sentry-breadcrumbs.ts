@@ -1,4 +1,10 @@
-import type { BeforeBreadcrumb, UrlBearingBreadcrumb } from './sentry-breadcrumbs.types.js';
+/** The breadcrumb fields the scrub reads, common to the Node, Next and browser SDKs. */
+type UrlBearingBreadcrumb = {
+  type?: string;
+  category?: string;
+  message?: string;
+  data?: Record<string, unknown>;
+};
 
 const REQUEST_CATEGORIES = new Set(['http', 'fetch', 'xhr']);
 
@@ -13,20 +19,8 @@ const KEPT_REQUEST_DATA_KEYS = new Set([
   'response_body_size',
 ]);
 
-const ABSOLUTE_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>]+/gi;
-
-/**
- * Runs the request-URL scrub before the app's own hook, so the app never sees, and cannot
- * re-emit, the path or query string.
- */
-export function scrubRequestUrlsBefore<Breadcrumb extends UrlBearingBreadcrumb, Hint>(
-  appBeforeBreadcrumb?: BeforeBreadcrumb<Breadcrumb, Hint>,
-): BeforeBreadcrumb<Breadcrumb, Hint> {
-  return function beforeBreadcrumb(breadcrumb, hint) {
-    const scrubbed = scrubRequestUrls(breadcrumb);
-    return appBeforeBreadcrumb ? appBeforeBreadcrumb(scrubbed, hint) : scrubbed;
-  };
-}
+// Absolute or protocol-relative; trailing punctuation is left to the sentence around the URL.
+const URL_PATTERN = /(?:\bhttps?:)?\/\/[^\s"'<>]*[^\s"'<>.,;:!?)\]]/gi;
 
 /**
  * An outgoing request's path names the object it touches (a storage key ends with the uploaded
@@ -36,19 +30,23 @@ export function scrubRequestUrlsBefore<Breadcrumb extends UrlBearingBreadcrumb, 
 export function scrubRequestUrls<Breadcrumb extends UrlBearingBreadcrumb>(
   breadcrumb: Breadcrumb,
 ): Breadcrumb {
-  const isRequestBreadcrumb =
-    breadcrumb.category !== undefined && REQUEST_CATEGORIES.has(breadcrumb.category);
-  if (!isRequestBreadcrumb) {
+  if (!isRequestBreadcrumb(breadcrumb)) {
     return breadcrumb;
   }
+  const { data, message } = breadcrumb;
   const scrubbed = { ...breadcrumb };
-  if (breadcrumb.data) {
-    scrubbed.data = scrubRequestData(breadcrumb.data);
+  if (data) {
+    scrubbed.data = scrubRequestData(data);
   }
-  if (breadcrumb.message) {
-    scrubbed.message = breadcrumb.message.replace(ABSOLUTE_URL_PATTERN, (url) => toOrigin(url));
+  if (message) {
+    scrubbed.message = scrubMessage({ message, requestUrl: data?.url });
   }
   return scrubbed;
+}
+
+/** Judged by type as well as category, so a request recorded under a new category is caught. */
+export function isRequestBreadcrumb(breadcrumb: UrlBearingBreadcrumb): boolean {
+  return breadcrumb.type === 'http' || REQUEST_CATEGORIES.has(breadcrumb.category ?? '');
 }
 
 function scrubRequestData(data: Record<string, unknown>): Record<string, unknown> {
@@ -60,11 +58,20 @@ function scrubRequestData(data: Record<string, unknown>): Record<string, unknown
   return scrubbed;
 }
 
-/** A relative URL is a same-origin browser request; one that does not parse is dropped whole. */
+/** The request's own URL is replaced even when it is a bare path, which the pattern misses. */
+function scrubMessage({ message, requestUrl }: { message: string; requestUrl: unknown }): string {
+  const withoutRequestUrl =
+    typeof requestUrl === 'string' && requestUrl
+      ? message.replaceAll(requestUrl, toOrigin(requestUrl))
+      : message;
+  return withoutRequestUrl.replace(URL_PATTERN, toOrigin);
+}
+
+/** A relative URL resolves against the page in a browser; elsewhere it has no origin to keep. */
 function toOrigin(url: string): string {
   try {
     return new URL(url, globalThis.location?.href).origin;
   } catch {
-    return '[unparsable url]';
+    return '[url without origin]';
   }
 }

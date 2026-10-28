@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/nextjs';
-import { scrubRequestUrlsBefore } from '../sentry-breadcrumbs.js';
-import type { NextSentryOptions } from './sentry.types.js';
+import { isRequestBreadcrumb, scrubRequestUrls } from '../sentry-breadcrumbs.js';
+import type { NextBeforeBreadcrumb, NextSentryOptions } from './sentry.types.js';
 
 const IDENTIFYING_KEY_PATTERNS = ['forwarded', '-ip', 'remote-', 'via', '-user'];
 
@@ -11,7 +11,8 @@ const NO_REQUEST_DATA_COLLECTION = {
   cookies: false,
   httpHeaders: { deny: IDENTIFYING_KEY_PATTERNS },
   httpBodies: [],
-  urlQueryParams: { deny: IDENTIFYING_KEY_PATTERNS },
+  // A query string can carry a signature or a one-time token under any name, so none is kept.
+  urlQueryParams: false,
   genAI: { inputs: false, outputs: false },
   databaseQueryData: false,
   graphQL: { document: false, variables: false },
@@ -23,10 +24,9 @@ const NO_REQUEST_DATA_COLLECTION = {
  * Errors only, and inert without `NEXT_PUBLIC_SENTRY_DSN`. Call it from `instrumentation.ts`'s
  * `register` and from `instrumentation-client.ts`. Every value is read inline: Next inlines
  * `process.env.NEXT_PUBLIC_*` only where it appears literally, and its minifier can fold a
- * passed-in value into an unbound shorthand that throws in the browser bundle. Request breadcrumbs
- * keep only the origin of the URL, before the app's own `beforeBreadcrumb` runs.
+ * passed-in value into an unbound shorthand that throws in the browser bundle.
  */
-export function initSentry({ beforeBreadcrumb }: NextSentryOptions = {}): void {
+export function initSentry(options: NextSentryOptions = {}): void {
   if (!process.env.NEXT_PUBLIC_SENTRY_DSN) {
     return;
   }
@@ -38,9 +38,23 @@ export function initSentry({ beforeBreadcrumb }: NextSentryOptions = {}): void {
     // not a zero rate: a rate yields to a sampled decision inherited from an incoming trace header,
     // which would send spans carrying every outgoing request's full URL.
     tracesSampler: () => 0,
-    beforeBreadcrumb: scrubRequestUrlsBefore(beforeBreadcrumb),
+    beforeBreadcrumb: scrubBeforeAppHook(options.beforeBreadcrumb),
     dataCollection: NO_REQUEST_DATA_COLLECTION,
   });
 }
 
 export type { NextSentryOptions } from './sentry.types.js';
+
+/**
+ * A request breadcrumb reaches the app's hook with only its origin and without the SDK's hint,
+ * which holds the raw request: the fetch arguments, the XHR, or the outgoing Node request.
+ */
+function scrubBeforeAppHook(appBeforeBreadcrumb?: NextBeforeBreadcrumb): NextBeforeBreadcrumb {
+  return function beforeBreadcrumb(breadcrumb, hint) {
+    if (!isRequestBreadcrumb(breadcrumb)) {
+      return appBeforeBreadcrumb ? appBeforeBreadcrumb(breadcrumb, hint) : breadcrumb;
+    }
+    const scrubbed = scrubRequestUrls(breadcrumb);
+    return appBeforeBreadcrumb ? appBeforeBreadcrumb(scrubbed) : scrubbed;
+  };
+}

@@ -1,9 +1,8 @@
 import type * as Sentry from '@sentry/nextjs';
 
+export type NextBeforeBreadcrumb = NonNullable<Sentry.BrowserOptions['beforeBreadcrumb']>;
+
 export type NextSentryOptions = {
-  /** Runs after the package's own scrub of request URLs, on every breadcrumb. */
-  beforeBreadcrumb?: (
-    breadcrumb: Sentry.Breadcrumb,
-    hint?: Sentry.BreadcrumbHint,
-  ) => Sentry.Breadcrumb | null;
+  /** Runs after the package has cut request URLs to their origin; see `initSentry`. */
+  beforeBreadcrumb?: NextBeforeBreadcrumb;
 };
