@@ -36,6 +36,8 @@ async function runAfterTasks(): Promise<void> {
 
 const betterStackRequests = () =>
   recording.requests.filter((request) => request.url === 'https://in.logs.example/source');
+const posthogRequests = () =>
+  recording.requests.filter((request) => request.url === 'https://eu.i.posthog.com/batch/');
 const telegramRequests = () =>
   recording.requests.filter((request) => request.url.startsWith('https://api.telegram.org/'));
 
@@ -271,5 +273,32 @@ describe('deep health route', () => {
     expect((await route()).status).toBe(200);
     expect((await route()).status).toBe(200);
     expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('ships the events of a request in one batch once the response is out', async () => {
+    vi.stubEnv('POSTHOG_PROJECT_KEY', 'phc_test');
+    const observability = freshObservability();
+
+    observability.captureEvent({ event: 'expense_created', userId: '42' });
+    observability.captureEvent({ event: 'report_viewed', userId: '42' });
+    expect(posthogRequests()).toHaveLength(0);
+    await runAfterTasks();
+
+    expect(posthogRequests()).toHaveLength(1);
+    expect(jsonBodyOf(posthogRequests()[0])).toMatchObject({
+      batch: [{ event: 'expense_created' }, { event: 'report_viewed' }],
+    });
+  });
+
+  it('sends no product events from the dev server', async () => {
+    vi.stubEnv('POSTHOG_PROJECT_KEY', 'phc_test');
+    vi.stubEnv('NODE_ENV', 'development');
+    const observability = freshObservability();
+
+    observability.captureEvent({ event: 'expense_created', userId: '42' });
+    await runAfterTasks();
+
+    expect(afterTasks).toEqual([]);
+    expect(posthogRequests()).toEqual([]);
   });
 });

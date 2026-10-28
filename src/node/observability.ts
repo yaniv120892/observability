@@ -1,6 +1,6 @@
 import type * as SentryNode from '@sentry/node';
 import type { Level, Logger } from 'pino';
-import { loadObservabilityConfig } from '../config.js';
+import { DEVELOPMENT_ENVIRONMENT, loadObservabilityConfig } from '../config.js';
 import { withholdingEventProcessor } from '../error-message.js';
 import type { ErrorMessage } from '../error-message.types.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
@@ -8,6 +8,7 @@ import { checkLiveness, createDeepHealthCheck } from '../health.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
+import { ProductAnalytics } from '../product-analytics.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
 import { scrubRequestUrls } from '../sentry-breadcrumbs.js';
 import type {
@@ -51,8 +52,6 @@ export async function createNodeObservability(
         fetchImplementation,
       })
     : null;
-  const timer = startFlushTimer({ remote, flushIntervalMs });
-
   const logger = createLogger({
     service,
     level: config.logLevel,
@@ -67,6 +66,23 @@ export async function createNodeObservability(
     environment: config.environment,
     errorMessage,
     logger,
+  });
+  // A local run would count toward the event quota with traffic the report leaves out.
+  const isLocalRun = config.environment === DEVELOPMENT_ENVIRONMENT;
+  const analytics = new ProductAnalytics({
+    service,
+    environment: config.environment,
+    config: isLocalRun ? null : config.productAnalytics,
+    logger,
+    fetchImplementation,
+  });
+  async function flushBuffers(): Promise<void> {
+    await Promise.all([remote?.flush(), analytics.flush()]);
+  }
+  const timer = startFlushTimer({
+    hasBuffers: remote !== null || analytics.isEnabled,
+    flushBuffers,
+    flushIntervalMs,
   });
   const alerter = new OpsAlerter({
     service,
@@ -83,10 +99,9 @@ export async function createNodeObservability(
       betterStack: remote !== null,
       sentry: sentry !== null,
       telegram: config.telegram !== null,
+      productAnalytics: analytics.isEnabled,
     },
-    async flushRemoteLogs() {
-      await remote?.flush();
-    },
+    flushRemoteLogs: flushBuffers,
     reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
       if (sentry) {
@@ -113,9 +128,12 @@ export async function createNodeObservability(
     createDeepHealthCheck(deepHealthOptions) {
       return createDeepHealthCheck({ ...deepHealthOptions, logger });
     },
+    captureEvent(event) {
+      analytics.capture(event);
+    },
     async shutdown() {
       clearInterval(timer);
-      await Promise.all([remote?.flush(), sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS)]);
+      await Promise.all([flushBuffers(), sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS)]);
     },
   };
 }
@@ -127,17 +145,19 @@ function defaultShipLevel(isServerless: boolean): Level {
 
 /** `flushIntervalMs` is null on serverless, where a frozen function would never fire the timer. */
 function startFlushTimer({
-  remote,
+  hasBuffers,
+  flushBuffers,
   flushIntervalMs,
 }: {
-  remote: RemoteLogBuffer | null;
+  hasBuffers: boolean;
+  flushBuffers: () => Promise<void>;
   flushIntervalMs: number | null;
 }): NodeJS.Timeout | undefined {
-  const hasNothingToFlushOnATimer = !remote || flushIntervalMs === null;
+  const hasNothingToFlushOnATimer = !hasBuffers || flushIntervalMs === null;
   if (hasNothingToFlushOnATimer) {
     return undefined;
   }
-  const timer = setInterval(() => void remote.flush(), flushIntervalMs);
+  const timer = setInterval(() => void flushBuffers(), flushIntervalMs);
   // The periodic flush must never be what keeps a stopping process alive.
   timer.unref();
   return timer;

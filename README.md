@@ -10,6 +10,8 @@ stack as My Expenses by importing it:
 - **Uptime** — Better Stack heartbeats, plus liveness and deep-health route handlers for monitors.
 - **Ops alerts** — Telegram messages to the owner, capped per alert type per hour, with a notice
   when the cap starts dropping alerts.
+- **Product events** — server-side events to one shared PostHog project, and a weekly Telegram
+  report built from them.
 
 Every integration is inert until its variables are set, and nothing here throws into the code it
 reports on.
@@ -17,7 +19,7 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.1.5 pino
+npm install github:yaniv120892/observability#v0.2.0 pino
 ```
 
 A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
@@ -31,6 +33,7 @@ for readable dev logs; a Node service installs `@sentry/node` if it reports to S
 | `NEXT_PUBLIC_SENTRY_DSN` (Next) / `SENTRY_DSN` (Node) | Sentry                    |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALERT_CHAT_ID`        | Ops alerts                |
 | `BETTERSTACK_HEARTBEAT_*` (any name you pass)         | Heartbeat pings           |
+| `POSTHOG_PROJECT_KEY` (`phc_…`), `POSTHOG_HOST`       | Product events            |
 | `LOG_LEVEL`                                           | Log level, default `info` |
 
 ## Next.js
@@ -131,7 +134,7 @@ at once when the buffer fills. Pass `shipLevel` to change where shipping starts.
 
 A function is frozen between invocations, so a timer never fires and a send nobody waits for is
 lost. `mode: 'serverless'` starts no timer and ships from `warn` up by default; the app awaits
-`flushRemoteLogs()` at the end of each invocation's work, and `waitUntil` keeps the function alive
+`flushRemoteLogs()` at the end of each invocation's work (it ships product events too), and `waitUntil` keeps the function alive
 for an error's immediate send and for the Sentry send of `reportError`. The `/node` entry loads
 through `require()` from a CommonJS build (Node 22.12 and later), and nothing in it needs `next`.
 
@@ -206,6 +209,36 @@ created; `initSentry({ errorMessage })` covers the ones before that and the brow
 helper from `@yaniv120892/observability/next/sentry`, which keeps pino out of the client bundle.
 `createLogger` takes the same option. Only the message is rewritten: other fields of the error,
 such as Prisma's `meta`, are logged as they are.
+
+## Product events
+
+Every app sends to the same PostHog project, because the free plan has one. Each event carries
+`app` (the `service` name) and `environment`, and its person is `<service>:<userId>`, so ids from
+two apps never merge and a dashboard filters by app.
+
+```ts
+observability.captureEvent({ event: 'expense_created', userId: user.id });
+```
+
+Send the app's own opaque user id and the name of the action, nothing else: no email, no name, no
+amount. Events are sent from the server only, so there is no client script and no cookie. In Next
+they ship after the response; in a Node service, on the flush timer and on `shutdown()`.
+`POSTHOG_HOST` defaults to the EU region, `https://eu.i.posthog.com`.
+
+### Weekly report
+
+`.github/workflows/weekly-report.yml` runs every Sunday at 09:00 Israel time and sends one Telegram
+message with, per app: active users, new users and actions against the week before, and the top
+users and actions. Events from `development`, `preview` and `test` are left out. It needs the
+`POSTHOG_PROJECT_ID` repository variable, a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
+only the `query:read` scope), and the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_ID` secrets.
+Run it now from the Actions tab with **Run workflow**. GitHub turns a schedule off after 60 days
+without a commit to the repository, so give it a Better Stack heartbeat with a period of a week and
+put its URL in the optional `BETTERSTACK_HEARTBEAT_WEEKLY_REPORT` secret; a missed Sunday then
+alerts.
+
+A Node service sends events only when `NODE_ENV` (or `VERCEL_ENV`) names a real environment such
+as `production`: unset, it counts as `development` and sends nothing.
 
 ## Release
 

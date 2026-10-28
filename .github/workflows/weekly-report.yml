@@ -1,0 +1,45 @@
+name: Weekly report
+
+on:
+  # Sunday 09:00 in Israel. GitHub cron runs in UTC, so both offsets are scheduled and the job
+  # skips the one that does not match the current one.
+  schedule:
+    - cron: '0 6 * * 0'
+    - cron: '0 7 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Skip the run for the other daylight-saving offset
+        id: offset
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          offset=$(TZ=Asia/Jerusalem date +%z)
+          case "$SCHEDULE|$offset" in
+            "|"*|"0 6 * * 0|+0300"|"0 7 * * 0|+0200") echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "run=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - if: steps.offset.outputs.run == 'true'
+        uses: actions/checkout@v7
+      - if: steps.offset.outputs.run == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.offset.outputs.run == 'true'
+        run: npm ci
+      - if: steps.offset.outputs.run == 'true'
+        run: node dist/report/send-weekly-report.js
+        env:
+          POSTHOG_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
+          POSTHOG_PERSONAL_API_KEY: ${{ secrets.POSTHOG_PERSONAL_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+          BETTERSTACK_HEARTBEAT_WEEKLY_REPORT: ${{ secrets.BETTERSTACK_HEARTBEAT_WEEKLY_REPORT }}

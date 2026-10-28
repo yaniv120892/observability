@@ -84,6 +84,7 @@ describe('createNodeObservability', () => {
       betterStack: true,
       sentry: false,
       telegram: false,
+      productAnalytics: false,
     });
     await observability.shutdown();
   });
@@ -162,6 +163,69 @@ describe('createNodeObservability', () => {
     await observability.pingHeartbeat('BETTERSTACK_HEARTBEAT_SYNC');
     expect(requests.map((request) => request.url)).toEqual(['https://uptime.example/hb']);
   });
+
+  it('ships product events on shutdown, as the app, under an app-scoped person', async () => {
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const observability = await createNodeObservability({
+      service: 'arbox',
+      environment: { NODE_ENV: 'production', POSTHOG_PROJECT_KEY: 'phc_test' },
+      fetchImplementation,
+      flushIntervalMs: 60_000,
+    });
+
+    observability.captureEvent({ event: 'class_booked', userId: 'owner', properties: { day: 3 } });
+    await observability.shutdown();
+
+    expect(observability.integrations.productAnalytics).toBe(true);
+    expect(requests.map((request) => request.url)).toEqual(['https://eu.i.posthog.com/batch/']);
+    expect(jsonBodyOf(requests[0])).toEqual({
+      api_key: 'phc_test',
+      batch: [
+        {
+          event: 'class_booked',
+          distinct_id: 'arbox:owner',
+          timestamp: expect.any(String),
+          properties: { day: 3, app: 'arbox', environment: 'production' },
+        },
+      ],
+    });
+  });
+
+  it('flushes product events on the timer even without log shipping', async () => {
+    vi.useFakeTimers();
+    try {
+      const { requests, fetchImplementation } = createRecordingFetch();
+      const observability = await createNodeObservability({
+        service: 'arbox',
+        environment: { NODE_ENV: 'production', POSTHOG_PROJECT_KEY: 'phc_test' },
+        fetchImplementation,
+        flushIntervalMs: 1000,
+      });
+
+      observability.captureEvent({ event: 'class_booked', userId: 'owner' });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(requests.map((request) => request.url)).toEqual(['https://eu.i.posthog.com/batch/']);
+      await observability.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends no product events from a development run', async () => {
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const observability = await createNodeObservability({
+      service: 'arbox',
+      environment: { POSTHOG_PROJECT_KEY: 'phc_test' },
+      fetchImplementation,
+    });
+
+    observability.captureEvent({ event: 'class_booked', userId: 'owner' });
+    await observability.shutdown();
+
+    expect(observability.integrations.productAnalytics).toBe(false);
+    expect(requests).toEqual([]);
+  });
 });
 
 describe('createNodeObservability on a long-running process', () => {
@@ -199,6 +263,21 @@ describe('createNodeObservability in serverless mode', () => {
     expect(requests).toHaveLength(0);
     await observability.flushRemoteLogs();
     expect(shippedRecords(requests)).toEqual([expect.objectContaining({ msg: 'slow_upstream' })]);
+  });
+
+  it('holds product events for flushRemoteLogs instead of a timer', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const observability = await createNodeObservability({
+      service: 'function',
+      mode: 'serverless',
+      environment: { NODE_ENV: 'production', POSTHOG_PROJECT_KEY: 'phc_test' },
+      fetchImplementation,
+    });
+    observability.captureEvent({ event: 'expense_created', userId: '42' });
+    expect(vi.getTimerCount()).toBe(0);
+    await observability.flushRemoteLogs();
+    expect(requests.map((request) => request.url)).toEqual(['https://eu.i.posthog.com/batch/']);
   });
 
   it('can be flushed again and again, sending only what arrived since', async () => {

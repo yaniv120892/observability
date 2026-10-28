@@ -1,5 +1,7 @@
 import type { LogLevel, ObservabilityConfig } from './config.types.js';
 
+export const DEVELOPMENT_ENVIRONMENT = 'development';
+const DEFAULT_POSTHOG_HOST = 'https://eu.i.posthog.com';
 const LOG_LEVELS: LogLevel[] = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 
 function optional(value: string | undefined): string | null {
@@ -27,12 +29,16 @@ export function loadObservabilityConfig(
   const sourceToken = optional(environment.BETTERSTACK_SOURCE_TOKEN);
   const botToken = optional(environment.TELEGRAM_BOT_TOKEN);
   const chatId = optional(environment.TELEGRAM_ALERT_CHAT_ID);
+  const projectKey = optional(environment.POSTHOG_PROJECT_KEY);
   return {
     logLevel: parseLogLevel(optional(environment.LOG_LEVEL)),
     environment:
-      optional(environment.VERCEL_ENV) ?? optional(environment.NODE_ENV) ?? 'development',
+      optional(environment.VERCEL_ENV) ?? optional(environment.NODE_ENV) ?? DEVELOPMENT_ENVIRONMENT,
     betterStack: sourceUrl && sourceToken ? { sourceUrl, sourceToken } : null,
     sentryDsn: optional(environment.SENTRY_DSN) ?? optional(environment.NEXT_PUBLIC_SENTRY_DSN),
     telegram: botToken && chatId ? { botToken, chatId } : null,
+    productAnalytics: projectKey
+      ? { projectKey, host: optional(environment.POSTHOG_HOST) ?? DEFAULT_POSTHOG_HOST }
+      : null,
   };
 }

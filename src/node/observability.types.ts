@@ -3,19 +3,21 @@ import type { ErrorMessage } from '../error-message.types.js';
 import type { ErrorReport } from '../error-report.types.js';
 import type { DeepHealth, DeepHealthOptions, LivenessHealth } from '../health.types.js';
 import type { AlertCounter, OpsAlert } from '../ops-alerter.types.js';
+import type { AnalyticsEvent } from '../product-analytics.types.js';
 
 /** Which integrations are live: Sentry counts only once its SDK has started. */
 export type ActiveIntegrations = {
   betterStack: boolean;
   sentry: boolean;
   telegram: boolean;
+  productAnalytics: boolean;
 };
 
 export type NodeObservability = {
   logger: Logger;
   integrations: ActiveIntegrations;
   /**
-   * Ships buffered records and resolves once every send has landed. A serverless function awaits
+   * Ships buffered log records and product events, and resolves once every send has landed. A serverless function awaits
    * it at the end of each invocation's work, since nothing else flushes there; safe to call often.
    */
   flushRemoteLogs(): Promise<void>;
@@ -25,6 +27,8 @@ export type NodeObservability = {
   pingHeartbeat(urlVariableName: string): Promise<void>;
   checkLiveness(): LivenessHealth;
   createDeepHealthCheck(options: DeepHealthOptions): () => Promise<DeepHealth>;
+  /** Queues a product event; it ships with the logs on the next flush and on shutdown. */
+  captureEvent(event: AnalyticsEvent): void;
   /** Ships whatever is still buffered; await it before the process exits. */
   shutdown(): Promise<void>;
 };
