@@ -1,3 +1,5 @@
+import pino from 'pino';
+import { pingHeartbeat } from '../heartbeat.js';
 import { sendTelegramMessage } from '../telegram.js';
 import { collectWeeklyStats, formatWeeklyReport } from './weekly-report.js';
 
@@ -20,5 +22,11 @@ await sendTelegramMessage({
   botToken: required('TELEGRAM_BOT_TOKEN'),
   chatId: required('TELEGRAM_ALERT_CHAT_ID'),
   text: formatWeeklyReport({ weeks, now: new Date() }),
+});
+// A missing ping is how a report that silently stopped running gets noticed.
+await pingHeartbeat({
+  name: 'BETTERSTACK_HEARTBEAT_WEEKLY_REPORT',
+  url: process.env.BETTERSTACK_HEARTBEAT_WEEKLY_REPORT,
+  logger: pino(),
 });
 console.info(`weekly report sent for ${weeks.length} apps`);

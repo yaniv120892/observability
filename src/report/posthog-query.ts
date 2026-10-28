@@ -1,8 +1,7 @@
-import type { HogQLRows, PostHogQueryOptions } from './weekly-report.types.js';
+import type { HogQLCell, HogQLRows, PostHogQueryOptions } from './weekly-report.types.js';
 
 const QUERY_TIMEOUT_MS = 30_000;
 
-/** Runs one HogQL query through PostHog's query API and returns its rows. */
 export async function runHogQLQuery({
   query,
   apiHost,
@@ -24,8 +23,8 @@ export async function runHogQLQuery({
 }
 
 function toRows(body: unknown): HogQLRows {
-  const results =
-    typeof body === 'object' && body !== null && 'results' in body ? body.results : null;
+  const hasResults = typeof body === 'object' && body !== null && 'results' in body;
+  const results = hasResults ? body.results : null;
   if (!Array.isArray(results)) {
     throw new Error('PostHog query returned no results array');
   }
@@ -37,7 +36,7 @@ function toRows(body: unknown): HogQLRows {
   });
 }
 
-function toCell(value: unknown): HogQLRows[number][number] {
+function toCell(value: unknown): HogQLCell {
   switch (typeof value) {
     case 'string':
     case 'number':

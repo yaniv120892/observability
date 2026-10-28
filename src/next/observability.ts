@@ -56,12 +56,14 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     logger,
     counter: alertCounter,
   });
+  const analyticsConfig = isDevelopment ? null : config.productAnalytics;
   const analytics = new ProductAnalytics({
     service,
     environment: config.environment,
-    config: isDevelopment ? null : config.productAnalytics,
+    config: analyticsConfig,
     logger,
   });
+  const analyticsFlusher = new AfterResponseFlusher(() => analytics.flush());
 
   return {
     logger,
@@ -90,7 +92,7 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
         return;
       }
       analytics.capture(event);
-      runAfterResponse(() => analytics.flush());
+      analyticsFlusher.schedule();
     },
     async onRequestError(error, request, context) {
       // The query string can carry tokens, and redaction works by field name, not by URL.
@@ -124,30 +126,19 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
 }
 
 /**
- * There is no shared route wrapper to flush from, so the first shippable record of a request
- * registers an `after` hook itself, and a concurrent request's records ride on the same hook. An
- * urgent record starts its send at once, and the hook keeps the invocation alive until it lands.
+ * Registers one `after` hook for every flush requested while it is pending, so a request that
+ * records ten things sends one batch. Past `STALE_FLUSH_MS` the hook is presumed lost with its
+ * invocation and the next request schedules a fresh one.
  */
-class RequestScopedFlusher {
-  private readonly remote: RemoteLogBuffer;
+class AfterResponseFlusher {
+  private readonly flush: () => Promise<void>;
   private flushScheduledAt: number | null = null;
 
-  public constructor(remote: RemoteLogBuffer) {
-    this.remote = remote;
+  public constructor(flush: () => Promise<void>) {
+    this.flush = flush;
   }
 
-  public write(line: string): void {
-    const outcome = this.remote.write(line);
-    if (outcome === 'skipped') {
-      return;
-    }
-    if (outcome === 'urgent') {
-      void this.remote.flush();
-    }
-    this.scheduleFlush();
-  }
-
-  private scheduleFlush(): void {
+  public schedule(): void {
     const isScheduled =
       this.flushScheduledAt !== null && Date.now() - this.flushScheduledAt < STALE_FLUSH_MS;
     if (isScheduled) {
@@ -159,7 +150,33 @@ class RequestScopedFlusher {
 
   private async flushFromHook(): Promise<void> {
     this.flushScheduledAt = null;
-    await this.remote.flush();
+    await this.flush();
+  }
+}
+
+/**
+ * There is no shared route wrapper to flush from, so the first shippable record of a request
+ * registers an `after` hook itself, and a concurrent request's records ride on the same hook. An
+ * urgent record starts its send at once, and the hook keeps the invocation alive until it lands.
+ */
+class RequestScopedFlusher {
+  private readonly remote: RemoteLogBuffer;
+  private readonly flusher: AfterResponseFlusher;
+
+  public constructor(remote: RemoteLogBuffer) {
+    this.remote = remote;
+    this.flusher = new AfterResponseFlusher(() => remote.flush());
+  }
+
+  public write(line: string): void {
+    const outcome = this.remote.write(line);
+    if (outcome === 'skipped') {
+      return;
+    }
+    if (outcome === 'urgent') {
+      void this.remote.flush();
+    }
+    this.flusher.schedule();
   }
 }
 

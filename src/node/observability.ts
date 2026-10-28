@@ -1,6 +1,6 @@
 import type * as SentryNode from '@sentry/node';
 import type { Logger } from 'pino';
-import { loadObservabilityConfig } from '../config.js';
+import { DEVELOPMENT_ENVIRONMENT, loadObservabilityConfig } from '../config.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
@@ -48,10 +48,12 @@ export async function createNodeObservability({
     environment: config.environment,
     logger,
   });
+  // A local run would count toward the event quota with traffic the report leaves out.
+  const isLocalRun = config.environment === DEVELOPMENT_ENVIRONMENT;
   const analytics = new ProductAnalytics({
     service,
     environment: config.environment,
-    config: config.productAnalytics,
+    config: isLocalRun ? null : config.productAnalytics,
     logger,
     fetchImplementation,
   });

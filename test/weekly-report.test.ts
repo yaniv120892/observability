@@ -9,9 +9,9 @@ describe('weekly report', () => {
   it('builds each app week from the query rows, without the app prefix on users', () => {
     const weeks = toAppWeeks({
       totals: [
-        ['expenses', true, 120, 4],
-        ['expenses', false, 100, 3],
-        ['arbox', 1, 9, 1],
+        ['expenses', 'current', 120, 4],
+        ['expenses', 'previous', 100, 3],
+        ['arbox', 'current', 9, 1],
       ],
       newUsers: [['expenses', 2]],
       byUser: [
@@ -55,7 +55,7 @@ describe('weekly report', () => {
 
     expect(text).toBe(
       [
-        '📊 Weekly report, 25/10 to 01/11',
+        '📊 Weekly report, the 7 days to 01/11',
         '',
         '▫️ expenses',
         'Active users: 4 (+1 vs last week)',

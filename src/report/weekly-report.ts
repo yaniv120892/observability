@@ -2,24 +2,27 @@ import { runHogQLQuery } from './posthog-query.js';
 import type { AppWeek, HogQLRows, PostHogQueryOptions, Ranked } from './weekly-report.types.js';
 
 const TOP_COUNT = 3;
-// Local runs and preview deploys would otherwise count as real users.
-const REAL_TRAFFIC = "properties.environment NOT IN ('development', 'preview', 'test')";
+// Local runs, preview deploys and events from outside these apps would otherwise count as users.
+const REAL_TRAFFIC =
+  "properties.app IS NOT NULL AND properties.environment NOT IN ('development', 'preview', 'test')";
 const THIS_WEEK = 'timestamp >= now() - INTERVAL 7 DAY';
 
 const QUERIES = {
-  totals: `SELECT properties.app, ${THIS_WEEK}, count(), count(DISTINCT distinct_id)
+  totals: `SELECT properties.app, if(${THIS_WEEK}, 'current', 'previous') AS week,
+      count(), count(DISTINCT distinct_id)
     FROM events WHERE timestamp >= now() - INTERVAL 14 DAY AND ${REAL_TRAFFIC}
-    GROUP BY properties.app, ${THIS_WEEK}`,
+    GROUP BY properties.app, week`,
+  // "New" means first seen within the project's data retention window.
   newUsers: `SELECT app, count() FROM (
       SELECT properties.app AS app, distinct_id, min(timestamp) AS first_seen
       FROM events WHERE ${REAL_TRAFFIC} GROUP BY app, distinct_id
     ) WHERE first_seen >= now() - INTERVAL 7 DAY GROUP BY app`,
   byUser: `SELECT properties.app, distinct_id, count() FROM events
     WHERE ${THIS_WEEK} AND ${REAL_TRAFFIC}
-    GROUP BY properties.app, distinct_id ORDER BY count() DESC LIMIT 1000`,
+    GROUP BY properties.app, distinct_id ORDER BY count() DESC LIMIT ${TOP_COUNT} BY properties.app`,
   byEvent: `SELECT properties.app, event, count() FROM events
     WHERE ${THIS_WEEK} AND ${REAL_TRAFFIC}
-    GROUP BY properties.app, event ORDER BY count() DESC LIMIT 1000`,
+    GROUP BY properties.app, event ORDER BY count() DESC LIMIT ${TOP_COUNT} BY properties.app`,
 };
 
 export async function collectWeeklyStats(options: PostHogQueryOptions): Promise<AppWeek[]> {
@@ -58,10 +61,9 @@ export function toAppWeeks(rows: {
     return created;
   };
 
-  for (const [app, isThisWeek, events, users] of rows.totals) {
+  for (const [app, period, events, users] of rows.totals) {
     const week = weekOf(String(app));
-    const isCurrent = isThisWeek === true || isThisWeek === 1;
-    if (isCurrent) {
+    if (period === 'current') {
       week.events = Number(events);
       week.activeUsers = Number(users);
     } else {
@@ -82,18 +84,11 @@ export function toAppWeeks(rows: {
   for (const [app, event, count] of rows.byEvent) {
     weekOf(String(app)).topEvents.push({ name: String(event), count: Number(count) });
   }
-  return [...weeks.values()]
-    .map((week) => ({
-      ...week,
-      topUsers: topOf(week.topUsers),
-      topEvents: topOf(week.topEvents),
-    }))
-    .sort((left, right) => right.events - left.events);
+  return [...weeks.values()].sort((left, right) => right.events - left.events);
 }
 
 export function formatWeeklyReport({ weeks, now }: { weeks: AppWeek[]; now: Date }): string {
-  const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const header = `📊 Weekly report, ${formatDay(weekStart)} to ${formatDay(now)}`;
+  const header = `📊 Weekly report, the 7 days to ${formatDay(now)}`;
   const activeWeeks = weeks.filter((week) => week.events > 0 || week.previousEvents > 0);
   if (activeWeeks.length === 0) {
     return `${header}\n\nNo activity in any app.`;
@@ -114,10 +109,6 @@ export function formatWeeklyReport({ weeks, now }: { weeks: AppWeek[]; now: Date
 function withoutAppPrefix({ distinctId, app }: { distinctId: string; app: string }): string {
   const prefix = `${app}:`;
   return distinctId.startsWith(prefix) ? distinctId.slice(prefix.length) : distinctId;
-}
-
-function topOf(ranked: Ranked[]): Ranked[] {
-  return [...ranked].sort((left, right) => right.count - left.count).slice(0, TOP_COUNT);
 }
 
 function change({ current, previous }: { current: number; previous: number }): string {

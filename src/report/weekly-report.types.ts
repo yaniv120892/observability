@@ -12,7 +12,9 @@ export type AppWeek = {
   topEvents: Ranked[];
 };
 
-export type HogQLRows = (string | number | boolean | null)[][];
+export type HogQLCell = string | number | boolean | null;
+
+export type HogQLRows = HogQLCell[][];
 
 export type PostHogQueryOptions = {
   apiHost: string;

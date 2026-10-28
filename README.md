@@ -146,7 +146,13 @@ message with, per app: active users, new users and actions against the week befo
 users and actions. Events from `development`, `preview` and `test` are left out. It needs the
 `POSTHOG_PROJECT_ID` repository variable, a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
 only the `query:read` scope), and the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_ID` secrets.
-Run it now from the Actions tab with **Run workflow**.
+Run it now from the Actions tab with **Run workflow**. GitHub turns a schedule off after 60 days
+without a commit to the repository, so give it a Better Stack heartbeat with a period of a week and
+put its URL in the optional `BETTERSTACK_HEARTBEAT_WEEKLY_REPORT` secret; a missed Sunday then
+alerts.
+
+A Node service sends events only when `NODE_ENV` (or `VERCEL_ENV`) names a real environment such
+as `production`: unset, it counts as `development` and sends nothing.
 
 ## Release
 

@@ -97,4 +97,42 @@ describe('ProductAnalytics', () => {
       'product_analytics_send_failed',
     );
   });
+
+  it('waits for a send already under way, so a shutdown flush does not drop it', async () => {
+    let releaseSend: () => void = () => undefined;
+    const fetchImplementation = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          releaseSend = () => resolve(new Response('', { status: 200 }));
+        }),
+    );
+    const { analytics } = createAnalytics({ fetchImplementation });
+    analytics.capture({ event: 'expense_created', userId: '42' });
+    const timerFlush = analytics.flush();
+
+    let isShutdownFlushDone = false;
+    async function shutdownFlushing(): Promise<void> {
+      await analytics.flush();
+      isShutdownFlushDone = true;
+    }
+    const shutdownFlush = shutdownFlushing();
+    await Promise.resolve();
+    expect(isShutdownFlushDone).toBe(false);
+
+    releaseSend();
+    await Promise.all([timerFlush, shutdownFlush]);
+    expect(isShutdownFlushDone).toBe(true);
+  });
+
+  it('says how many events it dropped once the queue overflowed', async () => {
+    const { fetchImplementation } = createRecordingFetch();
+    const { analytics, warn } = createAnalytics({ fetchImplementation });
+
+    for (let index = 0; index < 205; index += 1) {
+      analytics.capture({ event: 'page_viewed', userId: String(index) });
+    }
+    await analytics.flush();
+
+    expect(warn).toHaveBeenCalledWith({ droppedEvents: 5 }, 'product_analytics_queue_overflowed');
+  });
 });

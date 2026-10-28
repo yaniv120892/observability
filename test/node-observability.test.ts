@@ -174,4 +174,40 @@ describe('createNodeObservability', () => {
       ],
     });
   });
+
+  it('flushes product events on the timer even without log shipping', async () => {
+    vi.useFakeTimers();
+    try {
+      const { requests, fetchImplementation } = createRecordingFetch();
+      const observability = await createNodeObservability({
+        service: 'arbox',
+        environment: { NODE_ENV: 'production', POSTHOG_PROJECT_KEY: 'phc_test' },
+        fetchImplementation,
+        flushIntervalMs: 1000,
+      });
+
+      observability.captureEvent({ event: 'class_booked', userId: 'owner' });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(requests.map((request) => request.url)).toEqual(['https://eu.i.posthog.com/batch/']);
+      await observability.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends no product events from a development run', async () => {
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const observability = await createNodeObservability({
+      service: 'arbox',
+      environment: { POSTHOG_PROJECT_KEY: 'phc_test' },
+      fetchImplementation,
+    });
+
+    observability.captureEvent({ event: 'class_booked', userId: 'owner' });
+    await observability.shutdown();
+
+    expect(observability.integrations.productAnalytics).toBe(false);
+    expect(requests).toEqual([]);
+  });
 });

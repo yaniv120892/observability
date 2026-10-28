@@ -1,6 +1,6 @@
 import type { LogLevel, ObservabilityConfig } from './config.types.js';
 
-// The EU region keeps every app's events in Europe.
+export const DEVELOPMENT_ENVIRONMENT = 'development';
 const DEFAULT_POSTHOG_HOST = 'https://eu.i.posthog.com';
 const LOG_LEVELS: LogLevel[] = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 
@@ -33,7 +33,7 @@ export function loadObservabilityConfig(
   return {
     logLevel: parseLogLevel(optional(environment.LOG_LEVEL)),
     environment:
-      optional(environment.VERCEL_ENV) ?? optional(environment.NODE_ENV) ?? 'development',
+      optional(environment.VERCEL_ENV) ?? optional(environment.NODE_ENV) ?? DEVELOPMENT_ENVIRONMENT,
     betterStack: sourceUrl && sourceToken ? { sourceUrl, sourceToken } : null,
     sentryDsn: optional(environment.SENTRY_DSN) ?? optional(environment.NEXT_PUBLIC_SENTRY_DSN),
     telegram: botToken && chatId ? { botToken, chatId } : null,

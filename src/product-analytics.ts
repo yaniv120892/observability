@@ -36,6 +36,8 @@ export class ProductAnalytics {
   private readonly logger: Logger;
   private readonly fetchImplementation: typeof fetch;
   private buffer: PendingEvent[] = [];
+  private droppedEvents = 0;
+  private readonly pendingSends = new Set<Promise<void>>();
   private isFailureReported = false;
 
   public constructor(options: ProductAnalyticsOptions) {
@@ -56,6 +58,7 @@ export class ProductAnalytics {
     }
     if (this.buffer.length >= MAX_BUFFERED_EVENTS) {
       this.buffer.shift();
+      this.droppedEvents += 1;
     }
     this.buffer.push({
       event,
@@ -65,12 +68,50 @@ export class ProductAnalytics {
     });
   }
 
+  /**
+   * Sends what is queued beside any send already under way, and resolves once every send has
+   * landed, so a shutdown that flushes during a timer's send still waits for it.
+   */
   public async flush(): Promise<void> {
-    if (!this.config || this.buffer.length === 0) {
-      return;
+    while (this.hasUnsentWork()) {
+      if (this.buffer.length > 0) {
+        this.track(this.send(this.takeBatch()));
+      }
+      await Promise.all(this.pendingSends);
     }
+  }
+
+  private hasUnsentWork(): boolean {
+    return this.buffer.length > 0 || this.pendingSends.size > 0;
+  }
+
+  private track(send: Promise<void>): void {
+    this.pendingSends.add(send);
+    void this.forgetWhenSettled(send);
+  }
+
+  private async forgetWhenSettled(send: Promise<void>): Promise<void> {
+    try {
+      await send;
+    } finally {
+      this.pendingSends.delete(send);
+    }
+  }
+
+  private takeBatch(): PendingEvent[] {
     const batch = this.buffer;
     this.buffer = [];
+    if (this.droppedEvents > 0) {
+      this.logger.warn({ droppedEvents: this.droppedEvents }, 'product_analytics_queue_overflowed');
+      this.droppedEvents = 0;
+    }
+    return batch;
+  }
+
+  private async send(batch: PendingEvent[]): Promise<void> {
+    if (!this.config) {
+      return;
+    }
     try {
       const response = await this.fetchImplementation(`${this.config.host}/batch/`, {
         method: 'POST',
