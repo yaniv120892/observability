@@ -1,3 +1,5 @@
+import type { ProductAnalyticsConfig } from './product-analytics.types.js';
+
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
 
 export type ObservabilityConfig = {
@@ -6,4 +8,5 @@ export type ObservabilityConfig = {
   betterStack: { sourceUrl: string; sourceToken: string } | null;
   sentryDsn: string | null;
   telegram: { botToken: string; chatId: string } | null;
+  productAnalytics: ProductAnalyticsConfig | null;
 };

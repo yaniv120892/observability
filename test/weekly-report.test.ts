@@ -1,0 +1,110 @@
+import { describe, expect, it, vi } from 'vitest';
+import { runHogQLQuery } from '../src/report/posthog-query.js';
+import { formatWeeklyReport, toAppWeeks } from '../src/report/weekly-report.js';
+import { jsonBodyOf } from './fakes/recording-fetch.js';
+
+const NOW = new Date('2026-11-01T07:00:00Z');
+
+describe('weekly report', () => {
+  it('builds each app week from the query rows, without the app prefix on users', () => {
+    const weeks = toAppWeeks({
+      totals: [
+        ['expenses', true, 120, 4],
+        ['expenses', false, 100, 3],
+        ['arbox', 1, 9, 1],
+      ],
+      newUsers: [['expenses', 2]],
+      byUser: [
+        ['expenses', 'expenses:42', 80],
+        ['expenses', 'expenses:7', 30],
+        ['arbox', 'arbox:owner', 9],
+      ],
+      byEvent: [['expenses', 'expense_created', 100]],
+    });
+
+    expect(weeks.map((week) => week.app)).toEqual(['expenses', 'arbox']);
+    expect(weeks[0]).toMatchObject({
+      activeUsers: 4,
+      previousActiveUsers: 3,
+      newUsers: 2,
+      events: 120,
+      previousEvents: 100,
+      topUsers: [
+        { name: '42', count: 80 },
+        { name: '7', count: 30 },
+      ],
+    });
+  });
+
+  it('formats one section per app with week-over-week changes', () => {
+    const text = formatWeeklyReport({
+      now: NOW,
+      weeks: [
+        {
+          app: 'expenses',
+          activeUsers: 4,
+          previousActiveUsers: 3,
+          newUsers: 2,
+          events: 120,
+          previousEvents: 120,
+          topUsers: [{ name: '42', count: 80 }],
+          topEvents: [{ name: 'expense_created', count: 100 }],
+        },
+      ],
+    });
+
+    expect(text).toBe(
+      [
+        '📊 Weekly report, 25/10 to 01/11',
+        '',
+        '▫️ expenses',
+        'Active users: 4 (+1 vs last week)',
+        'New users: 2',
+        'Actions: 120 (same as last week)',
+        'Top users: 42 (80)',
+        'Top actions: expense_created (100)',
+      ].join('\n'),
+    );
+  });
+
+  it('says so when no app had any activity', () => {
+    expect(formatWeeklyReport({ now: NOW, weeks: [] })).toContain('No activity in any app.');
+  });
+
+  it('queries PostHog with the personal key and returns the rows', async () => {
+    const fetchImplementation = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ results: [['expenses', 3]] }), { status: 200 }),
+    );
+
+    const rows = await runHogQLQuery({
+      query: 'SELECT 1',
+      apiHost: 'https://eu.posthog.com',
+      projectId: '123',
+      personalApiKey: 'phx_secret',
+      fetchImplementation,
+    });
+
+    expect(rows).toEqual([['expenses', 3]]);
+    const [url, init] = fetchImplementation.mock.calls[0] ?? [];
+    expect(url).toBe('https://eu.posthog.com/api/projects/123/query/');
+    expect(init?.headers).toMatchObject({ Authorization: 'Bearer phx_secret' });
+    expect(jsonBodyOf({ url: String(url), init })).toEqual({
+      query: { kind: 'HogQLQuery', query: 'SELECT 1' },
+    });
+  });
+
+  it('fails loudly when PostHog rejects the query', async () => {
+    const fetchImplementation = vi.fn(async () => new Response('bad key', { status: 403 }));
+
+    await expect(
+      runHogQLQuery({
+        query: 'SELECT 1',
+        apiHost: 'https://eu.posthog.com',
+        projectId: '123',
+        personalApiKey: 'phx_secret',
+        fetchImplementation,
+      }),
+    ).rejects.toThrow('PostHog query answered 403: bad key');
+  });
+});

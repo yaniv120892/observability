@@ -5,6 +5,7 @@ import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
+import { ProductAnalytics } from '../product-analytics.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
 import { createDeepHealthRoute, healthRoute } from './health.js';
 import type { NextObservability, NextObservabilityOptions } from './observability.types.js';
@@ -55,6 +56,12 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     logger,
     counter: alertCounter,
   });
+  const analytics = new ProductAnalytics({
+    service,
+    environment: config.environment,
+    config: isDevelopment ? null : config.productAnalytics,
+    logger,
+  });
 
   return {
     logger,
@@ -77,6 +84,13 @@ function build({ service, secretKeys, alertCounter }: NextObservabilityOptions):
     },
     async pingHeartbeat(urlVariableName) {
       await pingHeartbeat({ name: urlVariableName, url: process.env[urlVariableName], logger });
+    },
+    captureEvent(event) {
+      if (!analytics.isEnabled) {
+        return;
+      }
+      analytics.capture(event);
+      runAfterResponse(() => analytics.flush());
     },
     async onRequestError(error, request, context) {
       // The query string can carry tokens, and redaction works by field name, not by URL.

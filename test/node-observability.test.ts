@@ -68,6 +68,7 @@ describe('createNodeObservability', () => {
       betterStack: true,
       sentry: false,
       telegram: false,
+      productAnalytics: false,
     });
     await observability.shutdown();
   });
@@ -145,5 +146,32 @@ describe('createNodeObservability', () => {
     });
     await observability.pingHeartbeat('BETTERSTACK_HEARTBEAT_SYNC');
     expect(requests.map((request) => request.url)).toEqual(['https://uptime.example/hb']);
+  });
+
+  it('ships product events on shutdown, as the app, under an app-scoped person', async () => {
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const observability = await createNodeObservability({
+      service: 'arbox',
+      environment: { NODE_ENV: 'production', POSTHOG_PROJECT_KEY: 'phc_test' },
+      fetchImplementation,
+      flushIntervalMs: 60_000,
+    });
+
+    observability.captureEvent({ event: 'class_booked', userId: 'owner', properties: { day: 3 } });
+    await observability.shutdown();
+
+    expect(observability.integrations.productAnalytics).toBe(true);
+    expect(requests.map((request) => request.url)).toEqual(['https://eu.i.posthog.com/batch/']);
+    expect(jsonBodyOf(requests[0])).toEqual({
+      api_key: 'phc_test',
+      batch: [
+        {
+          event: 'class_booked',
+          distinct_id: 'arbox:owner',
+          timestamp: expect.any(String),
+          properties: { day: 3, app: 'arbox', environment: 'production' },
+        },
+      ],
+    });
   });
 });

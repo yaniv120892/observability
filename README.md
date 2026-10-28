@@ -9,6 +9,8 @@ stack as My Expenses by importing it:
 - **Uptime** — Better Stack heartbeats, plus liveness and deep-health route handlers for monitors.
 - **Ops alerts** — Telegram messages to the owner, capped per alert type per hour, with a notice
   when the cap starts dropping alerts.
+- **Product events** — server-side events to one shared PostHog project, and a weekly Telegram
+  report built from them.
 
 Every integration is inert until its variables are set, and nothing here throws into the code it
 reports on.
@@ -16,7 +18,7 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.1.2 pino
+npm install github:yaniv120892/observability#v0.2.0 pino
 ```
 
 A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
@@ -30,6 +32,7 @@ for readable dev logs; a Node service installs `@sentry/node` if it reports to S
 | `NEXT_PUBLIC_SENTRY_DSN` (Next) / `SENTRY_DSN` (Node) | Sentry                    |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALERT_CHAT_ID`        | Ops alerts                |
 | `BETTERSTACK_HEARTBEAT_*` (any name you pass)         | Heartbeat pings           |
+| `POSTHOG_PROJECT_KEY` (`phc_…`), `POSTHOG_HOST`       | Product events            |
 | `LOG_LEVEL`                                           | Log level, default `info` |
 
 ## Next.js
@@ -120,6 +123,30 @@ process.once('SIGTERM', async () => {
 
 A long-running process ships every record from `info` up, on a timer, at once for an error, and
 at once when the buffer fills.
+
+## Product events
+
+Every app sends to the same PostHog project, because the free plan has one. Each event carries
+`app` (the `service` name) and `environment`, and its person is `<service>:<userId>`, so ids from
+two apps never merge and a dashboard filters by app.
+
+```ts
+observability.captureEvent({ event: 'expense_created', userId: user.id });
+```
+
+Send the app's own opaque user id and the name of the action, nothing else: no email, no name, no
+amount. Events are sent from the server only, so there is no client script and no cookie. In Next
+they ship after the response; in a Node service, on the flush timer and on `shutdown()`.
+`POSTHOG_HOST` defaults to the EU region, `https://eu.i.posthog.com`.
+
+### Weekly report
+
+`.github/workflows/weekly-report.yml` runs every Sunday at 09:00 Israel time and sends one Telegram
+message with, per app: active users, new users and actions against the week before, and the top
+users and actions. Events from `development`, `preview` and `test` are left out. It needs the
+`POSTHOG_PROJECT_ID` repository variable, a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
+only the `query:read` scope), and the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_ID` secrets.
+Run it now from the Actions tab with **Run workflow**.
 
 ## Release
 

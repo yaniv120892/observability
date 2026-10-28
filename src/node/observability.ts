@@ -5,6 +5,7 @@ import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
+import { ProductAnalytics } from '../product-analytics.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
 import type { NodeObservability, NodeObservabilityOptions } from './observability.types.js';
 
@@ -34,10 +35,6 @@ export async function createNodeObservability({
         fetchImplementation,
       })
     : null;
-  const timer = remote ? setInterval(() => void remote.flush(), flushIntervalMs) : undefined;
-  // The periodic flush must never be what keeps a stopping process alive.
-  timer?.unref();
-
   const logger = createLogger({
     service,
     level: config.logLevel,
@@ -51,6 +48,19 @@ export async function createNodeObservability({
     environment: config.environment,
     logger,
   });
+  const analytics = new ProductAnalytics({
+    service,
+    environment: config.environment,
+    config: config.productAnalytics,
+    logger,
+    fetchImplementation,
+  });
+  const hasPeriodicWork = remote !== null || analytics.isEnabled;
+  const timer = hasPeriodicWork
+    ? setInterval(() => void Promise.all([remote?.flush(), analytics.flush()]), flushIntervalMs)
+    : undefined;
+  // The periodic flush must never be what keeps a stopping process alive.
+  timer?.unref();
   const alerter = new OpsAlerter({
     service,
     telegram: config.telegram,
@@ -65,6 +75,7 @@ export async function createNodeObservability({
       betterStack: remote !== null,
       sentry: sentry !== null,
       telegram: config.telegram !== null,
+      productAnalytics: analytics.isEnabled,
     },
     reportError({ error, where, context = {} }) {
       logger.error({ err: error, ...context }, where);
@@ -85,9 +96,16 @@ export async function createNodeObservability({
         fetchImplementation,
       });
     },
+    captureEvent(event) {
+      analytics.capture(event);
+    },
     async shutdown() {
       clearInterval(timer);
-      await Promise.all([remote?.flush(), sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS)]);
+      await Promise.all([
+        remote?.flush(),
+        analytics.flush(),
+        sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS),
+      ]);
     },
   };
 }

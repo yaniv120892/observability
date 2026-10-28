@@ -2,6 +2,7 @@ import type { Instrumentation } from 'next';
 import type { Logger } from 'pino';
 import type { ErrorReport } from '../error-report.types.js';
 import type { AlertCounter, OpsAlert } from '../ops-alerter.types.js';
+import type { AnalyticsEvent } from '../product-analytics.types.js';
 import type { DeepHealthOptions } from './health.types.js';
 
 export type NextObservability = {
@@ -14,6 +15,8 @@ export type NextObservability = {
   /** Sends once the response is out, so a slow Telegram never delays the request. */
   scheduleOpsAlert(alert: OpsAlert): void;
   pingHeartbeat(urlVariableName: string): Promise<void>;
+  /** Queues a product event and ships it once the response is out. */
+  captureEvent(event: AnalyticsEvent): void;
   onRequestError: Instrumentation.onRequestError;
   healthRoute(): Response;
   createDeepHealthRoute(options: DeepHealthOptions): () => Promise<Response>;
