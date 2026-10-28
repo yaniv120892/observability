@@ -1,4 +1,5 @@
 import type { Logger } from 'pino';
+import { rewrittenMessage } from './error-message.js';
 import type { ErrorMessage } from './error-message.types.js';
 import { sendTelegramMessage } from './telegram.js';
 import type { AlertCounter, OpsAlert } from './ops-alerter.types.js';
@@ -124,7 +125,7 @@ export class OpsAlerter {
 
   private describe(error: unknown): string {
     if (error instanceof Error) {
-      return `${error.name}: ${this.errorMessage(error)}`;
+      return `${error.name}: ${rewrittenMessage({ error, errorMessage: this.errorMessage })}`;
     }
     return error === undefined || error === null ? '' : String(error);
   }

@@ -1,8 +1,7 @@
 import * as Sentry from '@sentry/nextjs';
-import { withholdEventMessages } from '../error-message.js';
+import { withholdingBeforeSend } from '../error-message.js';
 import { isRequestBreadcrumb, scrubRequestUrls } from '../sentry-breadcrumbs.js';
-import type { ErrorMessage } from '../error-message.types.js';
-import type { NextBeforeBreadcrumb, NextBeforeSend, NextSentryOptions } from './sentry.types.js';
+import type { NextBeforeBreadcrumb, NextSentryOptions } from './sentry.types.js';
 
 const IDENTIFYING_KEY_PATTERNS = ['forwarded', '-ip', 'remote-', 'via', '-user'];
 
@@ -45,22 +44,12 @@ export function initSentry(options: NextSentryOptions = {}): void {
     beforeBreadcrumb: scrubBeforeAppHook(options.beforeBreadcrumb),
     dataCollection: NO_REQUEST_DATA_COLLECTION,
     ...(options.errorMessage && {
-      beforeSend: withholdBeforeSend(options.errorMessage),
+      beforeSend: withholdingBeforeSend(options.errorMessage),
     }),
   });
 }
 
 export type { NextSentryOptions } from './sentry.types.js';
-
-function withholdBeforeSend(errorMessage: ErrorMessage): NextBeforeSend {
-  return function beforeSend(event, hint) {
-    return withholdEventMessages({
-      event,
-      originalException: hint.originalException,
-      errorMessage,
-    });
-  };
-}
 
 /**
  * A request breadcrumb reaches the app's hook with only its origin and without the SDK's hint,

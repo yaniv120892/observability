@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { withholdErrorMessages, withholdPrismaMessages } from '../src/error-message.js';
+import {
+  withholdErrorMessages,
+  withholdingBeforeSend,
+  withholdPrismaMessages,
+} from '../src/error-message.js';
 
 class PrismaClientKnownRequestError extends Error {
   public readonly code: string;
@@ -56,5 +60,47 @@ describe('withholdErrorMessages', () => {
     expect(copy.cause).toMatchObject({ message: 'Error; message withheld' });
     expect(copy instanceof AggregateError && copy.errors[0]).toBe(copy.cause);
     expect(copy.cause instanceof Error && copy.cause.cause).toBe(copy);
+  });
+});
+
+describe('withholdingBeforeSend', () => {
+  const prefixed = (error: Error) => `withheld(${error.name})`;
+
+  function eventOf(...errors: Error[]) {
+    return { exception: { values: errors.map((error) => ({ value: error.message })) } };
+  }
+
+  it('rewrites every aggregated error, not only the last one walked', () => {
+    const first = new Error('first dana@example.com');
+    const second = new Error('second dana@example.com');
+    const aggregate = new AggregateError([first, second], 'batch failed');
+    const event = withholdingBeforeSend(prefixed)(eventOf(first, second, aggregate), {
+      originalException: aggregate,
+    });
+    expect(event.exception.values.map(({ value }) => value)).toEqual([
+      'withheld(Error)',
+      'withheld(Error)',
+      'withheld(AggregateError)',
+    ]);
+  });
+
+  it('leaves an error this package already rewrote as it is', () => {
+    const lengthOnly = (error: Error) => `[${error.message.length} characters withheld]`;
+    const copy = withholdErrorMessages({
+      error: new Error('dana@example.com'),
+      errorMessage: lengthOnly,
+    });
+    const event = withholdingBeforeSend(lengthOnly)(eventOf(copy), { originalException: copy });
+    expect(event.exception.values.map(({ value }) => value)).toEqual(['[16 characters withheld]']);
+  });
+
+  it('withholds the whole message when errorMessage throws', () => {
+    const error = new Error('dana@example.com');
+    const event = withholdingBeforeSend(() => {
+      throw new Error('rewrite failed');
+    })(eventOf(error), { originalException: error });
+    expect(event.exception.values.map(({ value }) => value)).toEqual([
+      'Error; message withheld, errorMessage threw',
+    ]);
   });
 });

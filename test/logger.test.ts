@@ -58,6 +58,22 @@ describe('createLogger', () => {
     });
   });
 
+  it('still logs, with the message withheld, when errorMessage throws', () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = createLogger({
+      service: 'my-app',
+      level: 'info',
+      errorMessage: () => {
+        throw new Error('rewrite failed');
+      },
+      destinations: [{ write: (line: string) => lines.push(JSON.parse(line)) }],
+    });
+    logger.error({ err: new Error('dana@example.com') }, 'insert_failed');
+    expect(lines[0]).toMatchObject({
+      err: { message: 'Error; message withheld, errorMessage threw' },
+    });
+  });
+
   it('logs the raw message when no errorMessage is given', () => {
     const { logger, lines } = capture();
     logger.error({ err: new Error('Failing row contains (7)') }, 'insert_failed');

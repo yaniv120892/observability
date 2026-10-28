@@ -2,7 +2,6 @@ import * as Sentry from '@sentry/nextjs';
 import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
 import { withholdErrorMessages } from '../error-message.js';
-import type { ErrorMessage } from '../error-message.types.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
@@ -64,7 +63,10 @@ function build({
     counter: alertCounter,
     errorMessage,
   });
-  const forSentry = (error: unknown) => withheldForSentry({ error, errorMessage });
+  const forSentry = errorMessage
+    ? (error: unknown) =>
+        error instanceof Error ? withholdErrorMessages({ error, errorMessage }) : error
+    : (error: unknown) => error;
 
   return {
     logger,
@@ -160,17 +162,6 @@ class RequestScopedFlusher {
     this.flushScheduledAt = null;
     await this.remote.flush();
   }
-}
-
-function withheldForSentry({
-  error,
-  errorMessage,
-}: {
-  error: unknown;
-  errorMessage: ErrorMessage | undefined;
-}): unknown {
-  const shouldWithhold = errorMessage !== undefined && error instanceof Error;
-  return shouldWithhold ? withholdErrorMessages({ error, errorMessage }) : error;
 }
 
 function runAfterResponse(task: () => Promise<void>): void {

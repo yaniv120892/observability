@@ -1,7 +1,7 @@
 import type * as SentryNode from '@sentry/node';
 import type { Logger } from 'pino';
 import { loadObservabilityConfig } from '../config.js';
-import { withholdEventMessages } from '../error-message.js';
+import { withholdingBeforeSend } from '../error-message.js';
 import type { ErrorMessage } from '../error-message.types.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { checkLiveness, createDeepHealthCheck } from '../health.js';
@@ -39,6 +39,9 @@ export async function createNodeObservability(
   } = options;
   const isServerless = options.mode === 'serverless';
   const keepAlive = keepAliveWith(isServerless ? options.waitUntil : undefined);
+  const flushIntervalMs = isServerless
+    ? null
+    : (options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS);
   const config = loadObservabilityConfig(environment);
   const remote = config.betterStack
     ? new RemoteLogBuffer({
@@ -48,7 +51,7 @@ export async function createNodeObservability(
         fetchImplementation,
       })
     : null;
-  const timer = startFlushTimer({ remote, options });
+  const timer = startFlushTimer({ remote, flushIntervalMs });
 
   const logger = createLogger({
     service,
@@ -117,20 +120,18 @@ export async function createNodeObservability(
   };
 }
 
+/** `flushIntervalMs` is null on serverless, where a frozen function would never fire the timer. */
 function startFlushTimer({
   remote,
-  options,
+  flushIntervalMs,
 }: {
   remote: RemoteLogBuffer | null;
-  options: NodeObservabilityOptions;
+  flushIntervalMs: number | null;
 }): NodeJS.Timeout | undefined {
-  if (!remote || options.mode === 'serverless') {
+  if (!remote || flushIntervalMs === null) {
     return undefined;
   }
-  const timer = setInterval(
-    () => void remote.flush(),
-    options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS,
-  );
+  const timer = setInterval(() => void remote.flush(), flushIntervalMs);
   // The periodic flush must never be what keeps a stopping process alive.
   timer.unref();
   return timer;
@@ -138,10 +139,12 @@ function startFlushTimer({
 
 /** Without `waitUntil` the send still starts; it only has nothing holding the function open. */
 function keepAliveWith(waitUntil: WaitUntil | undefined): WaitUntil {
+  if (!waitUntil) {
+    return function keepNothingAlive() {
+      return undefined;
+    };
+  }
   return function keepAlive(promise) {
-    if (!waitUntil) {
-      return;
-    }
     try {
       waitUntil(promise);
     } catch {
@@ -194,10 +197,7 @@ async function startSentry({
       },
       // No integration here records requests yet; this keeps one added later from leaking URLs.
       beforeBreadcrumb: scrubRequestUrls,
-      ...(errorMessage && {
-        beforeSend: (event, hint) =>
-          withholdEventMessages({ event, originalException: hint.originalException, errorMessage }),
-      }),
+      ...(errorMessage && { beforeSend: withholdingBeforeSend(errorMessage) }),
       integrations: [
         sentry.eventFiltersIntegration(),
         sentry.functionToStringIntegration(),
