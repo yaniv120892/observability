@@ -6,6 +6,7 @@ import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
 import { OpsAlerter } from '../ops-alerter.js';
 import { RemoteLogBuffer } from '../remote-log-buffer.js';
+import { scrubRequestUrls } from '../sentry-breadcrumbs.js';
 import type { NodeObservability, NodeObservabilityOptions } from './observability.types.js';
 
 type SentryModule = typeof SentryNode;
@@ -124,6 +125,8 @@ async function startSentry({
         httpBodies: [],
         urlQueryParams: false,
       },
+      // No integration here records requests yet; this keeps one added later from leaking URLs.
+      beforeBreadcrumb: scrubRequestUrls,
       integrations: [
         sentry.eventFiltersIntegration(),
         sentry.functionToStringIntegration(),

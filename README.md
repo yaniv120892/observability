@@ -5,7 +5,8 @@ stack as My Expenses by importing it:
 
 - **Logs** — pino, JSON to stdout, and warn-and-above (plus any record marked `ship: true`) batched
   to a Better Stack HTTP source. Secrets are redacted by field name.
-- **Errors** — Sentry, errors only, with request data collection pinned off.
+- **Errors** — Sentry, errors only, with request data collection pinned off and outgoing request
+  breadcrumbs (`http`, `fetch`, `xhr`) cut to the URL's origin, method and status.
 - **Uptime** — Better Stack heartbeats, plus liveness and deep-health route handlers for monitors.
 - **Ops alerts** — Telegram messages to the owner, capped per alert type per hour, with a notice
   when the cap starts dropping alerts.
@@ -16,7 +17,7 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.1.2 pino
+npm install github:yaniv120892/observability#v0.1.4 pino
 ```
 
 A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
@@ -69,6 +70,9 @@ import { initSentry } from '@yaniv120892/observability/next/sentry';
 
 initSentry();
 ```
+
+`initSentry` takes an optional `beforeBreadcrumb`, which runs after the package has already cut
+request URLs down to their origin, so it never sees a path or query string.
 
 Health routes for the uptime monitors:
 
