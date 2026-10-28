@@ -33,5 +33,9 @@ describe('loadObservabilityConfig', () => {
       loadObservabilityConfig({ ...withKey, NODE_ENV: 'production', VERCEL_ENV: 'production' })
         .productAnalytics,
     ).not.toBeNull();
+    expect(
+      loadObservabilityConfig({ ...withKey, NODE_ENV: 'development', VERCEL_ENV: 'production' })
+        .productAnalytics,
+    ).toBeNull();
   });
 });

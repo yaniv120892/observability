@@ -139,6 +139,41 @@ describe('ProductAnalytics', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
 
+  it('drains on shutdown an event captured during the last send', async () => {
+    const capturing: { analytics?: ProductAnalytics } = {};
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const capturingOnce = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      capturing.analytics?.capture({ event: 'page_viewed', userId: '7' });
+      capturing.analytics = undefined;
+      return fetchImplementation(input, init);
+    });
+    const { analytics } = createAnalytics({ fetchImplementation: capturingOnce });
+    capturing.analytics = analytics;
+    analytics.capture({ event: 'expense_created', userId: '42' });
+
+    await analytics.drain();
+
+    expect(requests.map((request) => jsonBodyOf(request))).toEqual([
+      expect.objectContaining({ batch: [expect.objectContaining({ distinct_id: 'expenses:42' })] }),
+      expect.objectContaining({ batch: [expect.objectContaining({ distinct_id: 'expenses:7' })] }),
+    ]);
+  });
+
+  it('stops draining after a few rounds when traffic never stops', async () => {
+    const capturing: { analytics?: ProductAnalytics } = {};
+    const fetchImplementation = vi.fn(async () => {
+      capturing.analytics?.capture({ event: 'page_viewed', userId: '42' });
+      return new Response('', { status: 200 });
+    });
+    const { analytics } = createAnalytics({ fetchImplementation });
+    capturing.analytics = analytics;
+    analytics.capture({ event: 'page_viewed', userId: '42' });
+
+    await analytics.drain();
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(5);
+  });
+
   it('says how many events it dropped once the queue overflowed', async () => {
     const { fetchImplementation } = createRecordingFetch();
     const { analytics, warn } = createAnalytics({ fetchImplementation });

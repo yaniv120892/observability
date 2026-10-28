@@ -1,7 +1,7 @@
 import type { LogLevel, ObservabilityConfig } from './config.types.js';
 
 const DEVELOPMENT_ENVIRONMENT = 'development';
-const PRODUCTION_ENVIRONMENT = 'production';
+export const PRODUCTION_ENVIRONMENT = 'production';
 const DEFAULT_POSTHOG_HOST = 'https://eu.i.posthog.com';
 const LOG_LEVELS: LogLevel[] = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 
@@ -33,8 +33,11 @@ export function loadObservabilityConfig(
   const projectKey = optional(environment.POSTHOG_PROJECT_KEY);
   const environmentName =
     optional(environment.VERCEL_ENV) ?? optional(environment.NODE_ENV) ?? DEVELOPMENT_ENVIRONMENT;
-  // Local runs and preview deploys would spend the event quota on traffic the report leaves out.
-  const isProductTraffic = environmentName === PRODUCTION_ENVIRONMENT;
+  // Local runs and preview deploys would spend the event quota on traffic the report leaves out;
+  // `next dev` with production variables pulled still runs under NODE_ENV=development.
+  const isProductTraffic =
+    environmentName === PRODUCTION_ENVIRONMENT &&
+    optional(environment.NODE_ENV) !== DEVELOPMENT_ENVIRONMENT;
   return {
     logLevel: parseLogLevel(optional(environment.LOG_LEVEL)),
     environment: environmentName,

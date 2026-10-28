@@ -131,7 +131,11 @@ export async function createNodeObservability(
     },
     async shutdown() {
       clearInterval(timer);
-      await Promise.all([flushBuffers(), sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS)]);
+      await Promise.all([
+        remote?.flush(),
+        analytics.drain(),
+        sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS),
+      ]);
     },
   };
 }

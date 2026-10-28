@@ -27,8 +27,8 @@ describe('weekly report', () => {
       activeUsers: 4,
       previousActiveUsers: 3,
       newUsers: 2,
-      events: 120,
-      previousEvents: 100,
+      actions: 120,
+      previousActions: 100,
       visits: 40,
       previousVisits: 30,
       topUsers: [
@@ -47,12 +47,12 @@ describe('weekly report', () => {
           activeUsers: 4,
           previousActiveUsers: 3,
           newUsers: 2,
-          events: 120,
-          previousEvents: 120,
+          actions: 120,
+          previousActions: 120,
           visits: 40,
           previousVisits: 50,
           topUsers: [{ name: '42', count: 80 }],
-          topEvents: [{ name: 'expense_created', count: 100 }],
+          topActions: [{ name: 'expense_created', count: 100 }],
         },
       ],
     });
@@ -113,7 +113,7 @@ describe('weekly report', () => {
     });
   });
 
-  it('ranks top actions without page visits', async () => {
+  it('ranks top users and actions without page visits, from production only', async () => {
     const queries: string[] = [];
     const fetchImplementation = vi.fn(
       async (_input: string | URL | Request, init?: RequestInit) => {
@@ -129,8 +129,14 @@ describe('weekly report', () => {
       fetchImplementation,
     });
 
-    const topActionsQuery = queries.find((query) => query.includes('event, count()'));
-    expect(topActionsQuery).toContain("NOT event IN ('page_viewed', 'web_ui_visited')");
+    const rankingQueries = queries.filter((query) => query.includes('count() DESC'));
+    expect(rankingQueries).toHaveLength(2);
+    for (const query of rankingQueries) {
+      expect(query).toContain("event NOT IN ('page_viewed', 'web_ui_visited')");
+    }
+    for (const query of queries) {
+      expect(query).toContain("properties.environment = 'production'");
+    }
   });
 
   it('fails loudly when PostHog rejects the query', async () => {

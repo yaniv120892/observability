@@ -22,6 +22,7 @@ type PendingEvent = {
 
 const MAX_BUFFERED_EVENTS = 200;
 const SEND_TIMEOUT_MS = 3000;
+const MAX_DRAIN_ROUNDS = 5;
 
 /**
  * Sends product events to PostHog's batch API, without its SDK. One PostHog project serves every
@@ -78,6 +79,20 @@ export class ProductAnalytics {
       this.track(this.send(this.takeBatch()));
     }
     await Promise.all(this.pendingSends);
+  }
+
+  /**
+   * For shutdown: flushes again while events arrive during a send, so one captured by a request
+   * still finishing goes out too. Capped, so traffic that never stops cannot hold the exit open.
+   */
+  public async drain(): Promise<void> {
+    for (let round = 0; round < MAX_DRAIN_ROUNDS && this.hasUnsentWork(); round += 1) {
+      await this.flush();
+    }
+  }
+
+  private hasUnsentWork(): boolean {
+    return this.buffer.length > 0 || this.pendingSends.size > 0;
   }
 
   private track(send: Promise<void>): void {
