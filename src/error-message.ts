@@ -1,20 +1,20 @@
-import type { ErrorMessage, ExceptionEvent } from './error-message.types.js';
+import type { ErrorMessage, ExceptionEvent, SerializedErrorText } from './error-message.types.js';
+
+type Replacement = { original: string; replacement: string };
 
 const PRISMA_ERROR_PREFIX = 'PrismaClient';
-
-/** Copies already rewritten here, so a `beforeSend` that sees one does not rewrite it again. */
-const withheldCopies = new WeakSet<Error>();
+const FIRST_STACK_FRAME = /\n\s+at /;
 
 /**
  * An `errorMessage` for an app on Prisma: a Prisma error's message quotes the query's arguments,
- * and a failed check constraint quotes the whole failing row, so only its name and code are kept.
+ * and a failed check constraint quotes the whole failing row, so only its code is kept.
  */
 export function withholdPrismaMessages(error: Error): string {
   if (!error.name.startsWith(PRISMA_ERROR_PREFIX)) {
     return error.message;
   }
   const code = 'code' in error && typeof error.code === 'string' ? error.code : 'no code';
-  return `${error.name} (${code}); message withheld, it quotes query arguments`;
+  return `${code}; message withheld, it quotes query arguments`;
 }
 
 /**
@@ -31,111 +31,109 @@ export function rewrittenMessage({
   try {
     return errorMessage(error);
   } catch {
-    return `${error.name}; message withheld, errorMessage threw`;
+    return 'message withheld, errorMessage threw';
   }
 }
 
 /**
- * A copy of `error`, its causes and its aggregated errors, each with its message rewritten in
- * both `message` and `stack`. The original is left alone: the caller may still rethrow it.
+ * Rewrites a serialized error's text in place, causes and aggregated errors included. The error
+ * itself is never copied: a copy loses the internal slots some errors' getters read.
  */
-export function withholdErrorMessages({
+export function withholdSerializedError<Serialized extends SerializedErrorText>({
+  serialized,
   error,
   errorMessage,
 }: {
+  serialized: Serialized;
   error: Error;
   errorMessage: ErrorMessage;
-}): Error {
-  const copies = new Map<Error, Error>();
-
-  function withheldValue(value: unknown): unknown {
-    return value instanceof Error ? withheldCopy(value) : value;
-  }
-
-  function withheldCopy(original: Error): Error {
-    const existing = copies.get(original);
-    if (existing) {
-      return existing;
-    }
-    const copy: unknown = Object.create(
-      Object.getPrototypeOf(original),
-      Object.getOwnPropertyDescriptors(original),
-    );
-    if (!(copy instanceof Error)) {
-      return original;
-    }
-    copies.set(original, copy);
-    withheldCopies.add(copy);
-    const replacement = {
-      original: original.message,
-      replacement: rewrittenMessage({ error: original, errorMessage }),
-    };
-    defineHidden({ target: copy, key: 'message', value: replacement.replacement });
-    if (typeof original.stack === 'string') {
-      defineHidden({
-        target: copy,
-        key: 'stack',
-        value: replaceAll({ text: original.stack, replacements: [replacement] }),
-      });
-    }
-    if (original.cause !== undefined) {
-      defineHidden({ target: copy, key: 'cause', value: withheldValue(original.cause) });
-    }
-    if (original instanceof AggregateError && copy instanceof AggregateError) {
-      copy.errors = original.errors.map(withheldValue);
-    }
-    return copy;
-  }
-
-  return withheldCopy(error);
+}): Serialized {
+  const replacements = replacementsFor({ error, errorMessage });
+  rewriteSerialized({ serialized, replacements });
+  return serialized;
 }
 
 /**
- * A Sentry `beforeSend` that rewrites the messages of every error event, including those the SDK
- * builds itself from an error the package never saw: an unhandled one, or one a framework
- * integration captured.
+ * A Sentry event processor, usable as `beforeSend`, that rewrites the messages of every error
+ * event, including those the SDK builds itself from an error the package never saw, and the
+ * breadcrumbs that quote them.
  */
-export function withholdingBeforeSend(errorMessage: ErrorMessage) {
-  return function beforeSend<Event extends ExceptionEvent>(
+export function withholdingEventProcessor(errorMessage: ErrorMessage) {
+  return function withholdEventMessages<Event extends ExceptionEvent>(
     event: Event,
     hint: { originalException?: unknown },
   ): Event {
-    const replacements = linkedErrors(hint.originalException).map((error) => ({
-      original: error.message,
-      replacement: rewrittenMessage({ error, errorMessage }),
-    }));
+    const replacements = replacementsFor({ error: hint.originalException, errorMessage });
     for (const exception of event.exception?.values ?? []) {
       if (exception.value !== undefined) {
         exception.value = replaceAll({ text: exception.value, replacements });
+      }
+    }
+    for (const breadcrumb of event.breadcrumbs ?? []) {
+      if (breadcrumb.message !== undefined) {
+        breadcrumb.message = replaceAll({ text: breadcrumb.message, replacements });
       }
     }
     return event;
   };
 }
 
-type Replacement = { original: string; replacement: string };
-
-/** As the runtime defines them: writable, but not enumerable, so a serializer does not repeat them. */
-function defineHidden({ target, key, value }: { target: Error; key: string; value: unknown }) {
-  Object.defineProperty(target, key, {
-    value,
-    writable: true,
-    configurable: true,
-    enumerable: false,
-  });
+/**
+ * For each linked error, its message and its stack's header line. The header is replaced whole,
+ * so a message changed after the error was built, which the header no longer matches, is still
+ * withheld from the stack.
+ */
+function replacementsFor({
+  error,
+  errorMessage,
+}: {
+  error: unknown;
+  errorMessage: ErrorMessage;
+}): Replacement[] {
+  return linkedErrors(error)
+    .flatMap((linked) => {
+      const replacement = rewrittenMessage({ error: linked, errorMessage });
+      const header = stackHeader(linked);
+      return [
+        { original: linked.message, replacement },
+        ...(header === null
+          ? []
+          : [{ original: header, replacement: `${linked.name}: ${replacement}` }]),
+      ];
+    })
+    .filter(({ original, replacement }) => original !== '' && original !== replacement)
+    .toSorted((first, second) => second.original.length - first.original.length);
 }
 
-/**
- * `error` and every error reachable through `cause` and `AggregateError.errors`, each once,
- * leaving out the copies this module already rewrote.
- */
+function stackHeader(error: Error): string | null {
+  if (typeof error.stack !== 'string') {
+    return null;
+  }
+  const firstFrame = FIRST_STACK_FRAME.exec(error.stack);
+  return firstFrame ? error.stack.slice(0, firstFrame.index) : error.stack;
+}
+
+function rewriteSerialized({
+  serialized,
+  replacements,
+}: {
+  serialized: SerializedErrorText;
+  replacements: Replacement[];
+}): void {
+  serialized.message = replaceAll({ text: serialized.message, replacements });
+  serialized.stack = replaceAll({ text: serialized.stack, replacements });
+  for (const aggregated of serialized.aggregateErrors ?? []) {
+    rewriteSerialized({ serialized: aggregated, replacements });
+  }
+}
+
+/** `error` and every error reachable through `cause` and `AggregateError.errors`, each once. */
 function linkedErrors(error: unknown): Error[] {
   const found = new Set<Error>();
   const pending: unknown[] = [error];
   while (pending.length > 0) {
     const next = pending.pop();
-    const isUnseenOriginal = next instanceof Error && !found.has(next) && !withheldCopies.has(next);
-    if (isUnseenOriginal) {
+    if (next instanceof Error && !found.has(next)) {
       found.add(next);
       pending.push(next.cause, ...(next instanceof AggregateError ? next.errors : []));
     }
@@ -143,10 +141,10 @@ function linkedErrors(error: unknown): Error[] {
   return [...found];
 }
 
-/** Longest first, so a message that contains another is replaced whole. */
+/** Replacements arrive longest first, so a text that contains another is replaced whole. */
 function replaceAll({ text, replacements }: { text: string; replacements: Replacement[] }): string {
-  return replacements
-    .filter(({ original, replacement }) => original !== '' && original !== replacement)
-    .toSorted((first, second) => second.original.length - first.original.length)
-    .reduce((result, { original, replacement }) => result.replaceAll(original, replacement), text);
+  return replacements.reduce(
+    (result, { original, replacement }) => result.replaceAll(original, replacement),
+    text,
+  );
 }

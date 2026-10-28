@@ -4,7 +4,15 @@
  */
 export type ErrorMessage = (error: Error) => string;
 
-/** The part of a Sentry event that carries error messages, in both the Next and Node SDKs. */
+/** The parts of a Sentry event that quote error messages, in both the Next and Node SDKs. */
 export type ExceptionEvent = {
   exception?: { values?: { value?: string }[] };
+  breadcrumbs?: { message?: string }[];
+};
+
+/** The text fields of pino's serialized error, causes folded into `message` and `stack`. */
+export type SerializedErrorText = {
+  message: string;
+  stack: string;
+  aggregateErrors?: SerializedErrorText[];
 };

@@ -1,7 +1,7 @@
 import type * as SentryNode from '@sentry/node';
-import type { Logger } from 'pino';
+import type { Level, Logger } from 'pino';
 import { loadObservabilityConfig } from '../config.js';
-import { withholdingBeforeSend } from '../error-message.js';
+import { withholdingEventProcessor } from '../error-message.js';
 import type { ErrorMessage } from '../error-message.types.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { checkLiveness, createDeepHealthCheck } from '../health.js';
@@ -46,7 +46,7 @@ export async function createNodeObservability(
   const remote = config.betterStack
     ? new RemoteLogBuffer({
         ...config.betterStack,
-        shipLevel: options.shipLevel ?? (isServerless ? 'warn' : 'info'),
+        shipLevel: options.shipLevel ?? defaultShipLevel(isServerless),
         service,
         fetchImplementation,
       })
@@ -120,6 +120,11 @@ export async function createNodeObservability(
   };
 }
 
+/** Every serverless invocation would otherwise ship its `info` lines, as on Next. */
+function defaultShipLevel(isServerless: boolean): Level {
+  return isServerless ? 'warn' : 'info';
+}
+
 /** `flushIntervalMs` is null on serverless, where a frozen function would never fire the timer. */
 function startFlushTimer({
   remote,
@@ -128,7 +133,8 @@ function startFlushTimer({
   remote: RemoteLogBuffer | null;
   flushIntervalMs: number | null;
 }): NodeJS.Timeout | undefined {
-  if (!remote || flushIntervalMs === null) {
+  const hasNothingToFlushOnATimer = !remote || flushIntervalMs === null;
+  if (hasNothingToFlushOnATimer) {
     return undefined;
   }
   const timer = setInterval(() => void remote.flush(), flushIntervalMs);
@@ -197,7 +203,7 @@ async function startSentry({
       },
       // No integration here records requests yet; this keeps one added later from leaking URLs.
       beforeBreadcrumb: scrubRequestUrls,
-      ...(errorMessage && { beforeSend: withholdingBeforeSend(errorMessage) }),
+      ...(errorMessage && { beforeSend: withholdingEventProcessor(errorMessage) }),
       integrations: [
         sentry.eventFiltersIntegration(),
         sentry.functionToStringIntegration(),

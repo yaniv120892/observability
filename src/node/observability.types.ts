@@ -24,7 +24,6 @@ export type NodeObservability = {
   notifyOpsAlert(alert: OpsAlert): Promise<void>;
   pingHeartbeat(urlVariableName: string): Promise<void>;
   checkLiveness(): LivenessHealth;
-  /** The status and body for a deep-health route, with failed probes logged by this logger. */
   createDeepHealthCheck(options: DeepHealthOptions): () => Promise<DeepHealth>;
   /** Ships whatever is still buffered; await it before the process exits. */
   shutdown(): Promise<void>;

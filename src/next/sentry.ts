@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
-import { withholdingBeforeSend } from '../error-message.js';
+import { withholdingEventProcessor } from '../error-message.js';
 import { isRequestBreadcrumb, scrubRequestUrls } from '../sentry-breadcrumbs.js';
 import type { NextBeforeBreadcrumb, NextSentryOptions } from './sentry.types.js';
 
@@ -44,11 +44,13 @@ export function initSentry(options: NextSentryOptions = {}): void {
     beforeBreadcrumb: scrubBeforeAppHook(options.beforeBreadcrumb),
     dataCollection: NO_REQUEST_DATA_COLLECTION,
     ...(options.errorMessage && {
-      beforeSend: withholdingBeforeSend(options.errorMessage),
+      beforeSend: withholdingEventProcessor(options.errorMessage),
     }),
   });
 }
 
+export { withholdPrismaMessages } from '../error-message.js';
+export type { ErrorMessage } from '../error-message.types.js';
 export type { NextSentryOptions } from './sentry.types.js';
 
 /**

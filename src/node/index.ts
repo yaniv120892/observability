@@ -1,4 +1,5 @@
 export { createNodeObservability } from './observability.js';
+export { withholdPrismaMessages } from '../error-message.js';
 export type {
   ActiveIntegrations,
   LongRunningNodeObservabilityOptions,

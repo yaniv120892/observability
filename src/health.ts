@@ -6,7 +6,6 @@ import type {
   ProbeStatus,
 } from './health.types.js';
 
-/** A monitor polling through a cache would see a stale outcome, so no response is stored. */
 export const HEALTH_RESPONSE_HEADERS = { 'Cache-Control': 'no-store' } as const;
 
 const DEFAULT_RESULT_TTL_MS = 60_000;

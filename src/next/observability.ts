@@ -1,7 +1,7 @@
 import * as Sentry from '@sentry/nextjs';
 import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
-import { withholdErrorMessages } from '../error-message.js';
+import { withholdingEventProcessor } from '../error-message.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
@@ -63,10 +63,13 @@ function build({
     counter: alertCounter,
     errorMessage,
   });
-  const forSentry = errorMessage
-    ? (error: unknown) =>
-        error instanceof Error ? withholdErrorMessages({ error, errorMessage }) : error
-    : (error: unknown) => error;
+  if (errorMessage) {
+    // On the global scope, so every event the server SDK sends is covered, its own captures
+    // included, whether or not `initSentry` was given the same function.
+    captureQuietly(() =>
+      Sentry.getGlobalScope().addEventProcessor(withholdingEventProcessor(errorMessage)),
+    );
+  }
 
   return {
     logger,
@@ -78,10 +81,7 @@ function build({
       // Synchronous, so the SDK holds the event before this returns: an import still pending when
       // a serverless function freezes after its response loses the event with it.
       captureQuietly(() =>
-        Sentry.captureException(
-          forSentry(error),
-          toSentryCaptureContext({ where, context, secretKeys }),
-        ),
+        Sentry.captureException(error, toSentryCaptureContext({ where, context, secretKeys })),
       );
     },
     async notifyOpsAlert(alert) {
@@ -106,7 +106,7 @@ function build({
         },
         'unhandled_request_error',
       );
-      captureQuietly(() => Sentry.captureRequestError(forSentry(error), request, context));
+      captureQuietly(() => Sentry.captureRequestError(error, request, context));
       // Awaited rather than deferred: Next asks for every async task here to be awaited, and
       // `after` is not always available in this scope.
       await alerter.alert({

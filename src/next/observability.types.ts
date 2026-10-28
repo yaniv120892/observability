@@ -26,8 +26,9 @@ export type NextObservabilityOptions = {
   /** Defaults to a per-instance count; pass a shared store's counter to cap across instances. */
   alertCounter?: AlertCounter;
   /**
-   * Rewrites error messages in logs, ops alerts and the Sentry captures this object makes. Pass
-   * the same function to `initSentry` so the SDK's own captures are rewritten too.
+   * Rewrites error messages in logs, ops alerts and every server-side Sentry event sent once this
+   * object exists. Pass the same function to `initSentry` to cover events before then and in the
+   * browser.
    */
   errorMessage?: ErrorMessage;
 };

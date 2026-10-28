@@ -54,7 +54,7 @@ export class OpsAlerter {
     this.logger = options.logger;
     this.counter = options.counter ?? this.fallbackCounter;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
-    this.errorMessage = options.errorMessage ?? ((error) => error.message);
+    this.errorMessage = options.errorMessage ?? rawMessage;
   }
 
   public async alert(alert: OpsAlert): Promise<void> {
@@ -137,4 +137,8 @@ export class OpsAlerter {
       .slice(0, 80);
     return `ops-alert:${normalized}`;
   }
+}
+
+function rawMessage(error: Error): string {
+  return error.message;
 }

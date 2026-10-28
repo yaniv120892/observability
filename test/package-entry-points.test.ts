@@ -14,12 +14,17 @@ const entryPoints = [
   },
   {
     entryPoint: '@yaniv120892/observability/node',
-    expectedExports: ['createNodeObservability'],
+    expectedExports: ['createNodeObservability', 'withholdPrismaMessages'],
     isFrameworkFree: true,
   },
   {
     entryPoint: '@yaniv120892/observability/next',
-    expectedExports: ['createNextObservability'],
+    expectedExports: ['createNextObservability', 'withholdPrismaMessages'],
+    isFrameworkFree: false,
+  },
+  {
+    entryPoint: '@yaniv120892/observability/next/sentry',
+    expectedExports: ['initSentry', 'withholdPrismaMessages'],
     isFrameworkFree: false,
   },
 ];

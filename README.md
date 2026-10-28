@@ -189,21 +189,23 @@ The same checks are exported from the root entry as `checkLiveness` and `createD
 ## Withholding error messages
 
 Some error messages quote the data that failed: a Prisma error quotes the query's arguments, and a
-failed check constraint quotes the whole row. `errorMessage` rewrites an error's message, inside
-its stack and its causes too, wherever the package sends it — the `err` field of every log line,
-every Sentry event, and ops alerts. It defaults to the message unchanged.
+failed check constraint quotes the whole row. `errorMessage` rewrites an error's message wherever
+the package sends it: the `err` field and the `msg` it lends a line, the stack and causes, every
+Sentry event's exception values and breadcrumbs, and ops alerts. It defaults to the message
+unchanged, and one that throws withholds the message outright.
 
 ```ts
-import { withholdPrismaMessages } from '@yaniv120892/observability';
+import { createNodeObservability, withholdPrismaMessages } from '@yaniv120892/observability/node';
 
 createNodeObservability({ service: 'my-worker', errorMessage: withholdPrismaMessages });
-createNextObservability({ service: 'my-app', errorMessage: withholdPrismaMessages });
 ```
 
-A Next app also passes it to `initSentry({ errorMessage: withholdPrismaMessages })` in
-`instrumentation.ts`, so the events Sentry captures by itself are rewritten too; the Node entry
-starts Sentry itself and covers them already. `createLogger` takes the same option. Only the
-message is rewritten: other fields of the error, such as Prisma's `meta`, are logged as they are.
+The Node entry starts Sentry itself, so that covers every event. In a Next app,
+`createNextObservability({ service, errorMessage })` covers every server event sent once it has been
+created; `initSentry({ errorMessage })` covers the ones before that and the browser's. Both take the
+helper from `@yaniv120892/observability/next/sentry`, which keeps pino out of the client bundle.
+`createLogger` takes the same option. Only the message is rewritten: other fields of the error,
+such as Prisma's `meta`, are logged as they are.
 
 ## Release
 
