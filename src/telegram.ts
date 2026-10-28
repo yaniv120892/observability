@@ -30,7 +30,26 @@ export async function sendTelegramMessage({
     },
   );
   if (!response.ok) {
-    // The URL carries the bot token, so it stays out of the error.
-    throw new Error(`Telegram sendMessage answered ${response.status}`);
+    // The URL carries the bot token, so it stays out of the error; Telegram's
+    // reason ("Bad Request: chat not found") is what says how to fix it.
+    const reason = await readTelegramReason(response);
+    throw new Error(`Telegram sendMessage answered ${response.status}: ${reason}`);
   }
+}
+
+async function readTelegramReason(response: Response): Promise<string> {
+  try {
+    const body: unknown = await response.json();
+    if (
+      typeof body === 'object' &&
+      body !== null &&
+      'description' in body &&
+      typeof body.description === 'string'
+    ) {
+      return body.description;
+    }
+  } catch {
+    // A body that is not JSON (a proxy's error page) has no reason to report.
+  }
+  return 'no reason given';
 }
