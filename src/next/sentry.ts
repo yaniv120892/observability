@@ -37,7 +37,9 @@ export function initSentry(options: NextSentryOptions = {}): void {
     // Traces and Session Replay bill against their own quotas; only errors are budgeted. A sampler,
     // not a zero rate: a rate yields to a sampled decision inherited from an incoming trace header,
     // which would send spans carrying every outgoing request's full URL.
-    tracesSampler: () => 0,
+    tracesSampler: function sampleNoTrace() {
+      return 0;
+    },
     beforeBreadcrumb: scrubBeforeAppHook(options.beforeBreadcrumb),
     dataCollection: NO_REQUEST_DATA_COLLECTION,
   });

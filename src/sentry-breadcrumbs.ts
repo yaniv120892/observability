@@ -1,4 +1,3 @@
-/** The breadcrumb fields the scrub reads, common to the Node, Next and browser SDKs. */
 type UrlBearingBreadcrumb = {
   type?: string;
   category?: string;
