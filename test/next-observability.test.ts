@@ -16,6 +16,7 @@ vi.mock('@sentry/nextjs', () => ({
     capturedExceptions.push({ error, hint });
   },
   captureRequestError: () => sentryCalls.push('captureRequestError'),
+  getGlobalScope: () => ({ addEventProcessor: () => undefined }),
 }));
 
 const { createNextObservability } = await import('../src/next/observability.js');
@@ -210,6 +211,39 @@ describe('createNextObservability', () => {
       .find((record) => record.msg === 'unhandled_request_error');
     expect(errorRecord).toMatchObject({ path: '/api/items' });
     expect(betterStackRequests().length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('createNextObservability with an errorMessage', () => {
+  function withholdingObservability() {
+    serviceIndex += 1;
+    return createNextObservability({
+      service: `next-app-${serviceIndex}`,
+      errorMessage: (error) => `${error.name}; message withheld`,
+    });
+  }
+
+  it('withholds the message from the log and the alert of a request error', async () => {
+    const { onRequestError } = withholdingObservability();
+    const error = new Error('Failing row contains (7, dana@example.com)');
+    await onRequestError(
+      error,
+      { path: '/api/items', method: 'POST', headers: {} },
+      {
+        routerKind: 'App Router',
+        routePath: '/api/items',
+        routeType: 'route',
+        renderSource: undefined,
+        revalidateReason: undefined,
+      },
+    );
+    expect(JSON.stringify(recording.requests.map(({ init }) => init?.body))).not.toContain(
+      'dana@example.com',
+    );
+    expect(jsonBodyOf(telegramRequests()[0])).toMatchObject({
+      text: expect.stringContaining('Error: Error; message withheld'),
+    });
+    expect(error.message).toBe('Failing row contains (7, dana@example.com)');
   });
 });
 

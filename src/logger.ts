@@ -1,4 +1,6 @@
 import pino, { type DestinationStream, type Logger } from 'pino';
+import { rewrittenMessage, withholdSerializedError } from './error-message.js';
+import type { ErrorMessage } from './error-message.types.js';
 
 // Redaction matches keys exactly, so header names appear in both of the cases they arrive in.
 const DEFAULT_SECRET_KEYS = [
@@ -20,6 +22,8 @@ export const REDACTED = '[redacted]';
 /** Matches the `key`, `*.key` and `*.*.key` paths the logger redacts. */
 const REDACTION_DEPTH = 3;
 
+type LogMethodHook = NonNullable<NonNullable<pino.LoggerOptions['hooks']>['logMethod']>;
+
 type CreateLoggerOptions = {
   service: string;
   level: string;
@@ -28,6 +32,8 @@ type CreateLoggerOptions = {
   secretKeys?: string[];
   /** Human-readable output through pino-pretty, for a local dev server. */
   pretty?: boolean;
+  /** Rewrites the message of every logged error, in `err` and in the `msg` it lends; see `ErrorMessage`. */
+  errorMessage?: ErrorMessage;
 };
 
 /**
@@ -41,6 +47,7 @@ export function createLogger({
   destinations,
   secretKeys = [],
   pretty = false,
+  errorMessage,
 }: CreateLoggerOptions): Logger {
   const options: pino.LoggerOptions = {
     level,
@@ -50,6 +57,20 @@ export function createLogger({
       censor: REDACTED,
     },
   };
+  if (errorMessage) {
+    options.serializers = {
+      err: function serializeWithheldError(value: unknown) {
+        return value instanceof Error
+          ? withholdSerializedError({
+              serialized: pino.stdSerializers.err(value),
+              error: value,
+              errorMessage,
+            })
+          : value;
+      },
+    };
+    options.hooks = { logMethod: withholdDefaultMessage(errorMessage) };
+  }
   if (pretty) {
     return pino({ ...options, transport: { target: 'pino-pretty', options: { colorize: true } } });
   }
@@ -66,6 +87,33 @@ export function createLogger({
     options,
     pino.multistream(destinations.map((stream) => ({ stream, level: 'trace' }))),
   );
+}
+
+/**
+ * Logged without a message string, an error lends its own message to the line's `msg`, which the
+ * `err` serializer never sees; this passes the rewritten one instead.
+ */
+function withholdDefaultMessage(errorMessage: ErrorMessage): LogMethodHook {
+  return function logWithWithheldMessage(args, method) {
+    const [mergingObject] = args;
+    const error = loggedError(mergingObject);
+    if (args.length === 1 && error) {
+      method.apply(this, [mergingObject, rewrittenMessage({ error, errorMessage })]);
+      return;
+    }
+    method.apply(this, args);
+  };
+}
+
+function loggedError(mergingObject: unknown): Error | null {
+  if (mergingObject instanceof Error) {
+    return mergingObject;
+  }
+  const isObject = typeof mergingObject === 'object' && mergingObject !== null;
+  if (isObject && 'err' in mergingObject && mergingObject.err instanceof Error) {
+    return mergingObject.err;
+  }
+  return null;
 }
 
 /**

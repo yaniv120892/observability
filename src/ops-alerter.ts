@@ -1,4 +1,6 @@
 import type { Logger } from 'pino';
+import { rewrittenMessage } from './error-message.js';
+import type { ErrorMessage } from './error-message.types.js';
 import { sendTelegramMessage } from './telegram.js';
 import type { AlertCounter, OpsAlert } from './ops-alerter.types.js';
 
@@ -8,6 +10,7 @@ type OpsAlerterOptions = {
   logger: Logger;
   /** Defaults to a per-process count; pass a shared store's counter to cap across instances. */
   counter?: AlertCounter;
+  errorMessage?: ErrorMessage;
   fetchImplementation?: typeof fetch;
 };
 
@@ -43,6 +46,7 @@ export class OpsAlerter {
   private readonly counter: AlertCounter;
   private readonly fallbackCounter = createInMemoryAlertCounter();
   private readonly fetchImplementation: typeof fetch;
+  private readonly errorMessage: ErrorMessage;
 
   public constructor(options: OpsAlerterOptions) {
     this.service = options.service;
@@ -50,6 +54,7 @@ export class OpsAlerter {
     this.logger = options.logger;
     this.counter = options.counter ?? this.fallbackCounter;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
+    this.errorMessage = options.errorMessage ?? rawMessage;
   }
 
   public async alert(alert: OpsAlert): Promise<void> {
@@ -73,7 +78,7 @@ export class OpsAlerter {
     } catch (error) {
       // Only the message: a fetch error's cause can carry the request, whose URL holds the token.
       this.logger.error(
-        { reason: OpsAlerter.errorMessage(error), alertType: alert.alertType },
+        { reason: this.describe(error), alertType: alert.alertType },
         'ops_alert_failed',
       );
     }
@@ -84,7 +89,7 @@ export class OpsAlerter {
     try {
       return await this.counter({ key, windowSeconds: WINDOW_SECONDS });
     } catch (error) {
-      this.logger.warn({ reason: OpsAlerter.errorMessage(error) }, 'ops_alert_counter_failed');
+      this.logger.warn({ reason: this.describe(error) }, 'ops_alert_counter_failed');
       return this.fallbackCounter({ key, windowSeconds: WINDOW_SECONDS });
     }
   }
@@ -98,7 +103,7 @@ export class OpsAlerter {
 
   private format({ title, error, context }: OpsAlert): string {
     const lines = [`🚨 [${this.service}] ${title}`];
-    const message = OpsAlerter.errorMessage(error);
+    const message = this.describe(error);
     if (message) {
       lines.push(message);
     }
@@ -118,9 +123,9 @@ export class OpsAlerter {
     ].join('\n');
   }
 
-  private static errorMessage(error: unknown): string {
+  private describe(error: unknown): string {
     if (error instanceof Error) {
-      return `${error.name}: ${error.message}`;
+      return `${error.name}: ${rewrittenMessage({ error, errorMessage: this.errorMessage })}`;
     }
     return error === undefined || error === null ? '' : String(error);
   }
@@ -132,4 +137,8 @@ export class OpsAlerter {
       .slice(0, 80);
     return `ops-alert:${normalized}`;
   }
+}
+
+function rawMessage(error: Error): string {
+  return error.message;
 }
