@@ -226,14 +226,16 @@ weekly report counts it as a visit, and leaves it out of the action counts and t
 actions. Events are sent from the server only, so there is no client script and no cookie. In Next
 they ship after the response; in a Node service, on the flush timer and on `shutdown()`, which also
 sends what requests still finishing capture during that last send.
-`POSTHOG_HOST` defaults to the EU region, `https://eu.i.posthog.com`.
+`POSTHOG_HOST` defaults to the EU region, `https://eu.i.posthog.com`; a project in the US region
+needs `https://us.i.posthog.com`, or its events are rejected.
 
 ### Weekly report
 
 `.github/workflows/weekly-report.yml` runs every Sunday at 09:00 Israel time and sends one Telegram
 message with, per app: active users, new users, visits and actions against the week before, and the
 top users and actions. It counts `production` events only. It needs the
-`POSTHOG_PROJECT_ID` repository variable, a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
+`POSTHOG_PROJECT_ID` repository variable (and `POSTHOG_API_HOST`, `https://us.posthog.com`, for a
+US-region project), a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
 only the `query:read` scope), and the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_ID` secrets.
 Run it now from the Actions tab with **Run workflow**. GitHub turns a schedule off after 60 days
 without a commit to the repository, so give it a Better Stack heartbeat with a period of a week and
