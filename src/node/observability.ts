@@ -1,6 +1,6 @@
 import type * as SentryNode from '@sentry/node';
 import type { Level, Logger } from 'pino';
-import { DEVELOPMENT_ENVIRONMENT, loadObservabilityConfig } from '../config.js';
+import { loadObservabilityConfig } from '../config.js';
 import { withholdingEventProcessor } from '../error-message.js';
 import type { ErrorMessage } from '../error-message.types.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
@@ -67,12 +67,10 @@ export async function createNodeObservability(
     errorMessage,
     logger,
   });
-  // A local run would count toward the event quota with traffic the report leaves out.
-  const isLocalRun = config.environment === DEVELOPMENT_ENVIRONMENT;
   const analytics = new ProductAnalytics({
     service,
     environment: config.environment,
-    config: isLocalRun ? null : config.productAnalytics,
+    config: config.productAnalytics,
     logger,
     fetchImplementation,
   });
@@ -133,7 +131,11 @@ export async function createNodeObservability(
     },
     async shutdown() {
       clearInterval(timer);
-      await Promise.all([flushBuffers(), sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS)]);
+      await Promise.all([
+        remote?.flush(),
+        analytics.drain(),
+        sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS),
+      ]);
     },
   };
 }

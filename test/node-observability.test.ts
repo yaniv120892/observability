@@ -191,6 +191,32 @@ describe('createNodeObservability', () => {
     });
   });
 
+  it('ships on shutdown a product event captured during the final send', async () => {
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const capturing: { captureEvent?: (userId: string) => void } = {};
+    const capturingFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      capturing.captureEvent?.('late');
+      capturing.captureEvent = undefined;
+      return fetchImplementation(input, init);
+    });
+    const observability = await createNodeObservability({
+      service: 'arbox',
+      environment: { NODE_ENV: 'production', POSTHOG_PROJECT_KEY: 'phc_test' },
+      fetchImplementation: capturingFetch,
+      flushIntervalMs: 60_000,
+    });
+    capturing.captureEvent = (userId) =>
+      observability.captureEvent({ event: 'class_booked', userId });
+
+    observability.captureEvent({ event: 'class_booked', userId: 'owner' });
+    await observability.shutdown();
+
+    expect(requests.map((request) => jsonBodyOf(request))).toEqual([
+      expect.objectContaining({ batch: [expect.objectContaining({ distinct_id: 'arbox:owner' })] }),
+      expect.objectContaining({ batch: [expect.objectContaining({ distinct_id: 'arbox:late' })] }),
+    ]);
+  });
+
   it('flushes product events on the timer even without log shipping', async () => {
     vi.useFakeTimers();
     try {

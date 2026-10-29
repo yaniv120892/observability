@@ -1,15 +1,19 @@
+import { PRODUCTION_ENVIRONMENT } from '../config.js';
 import { runHogQLQuery } from './posthog-query.js';
 import type { AppWeek, HogQLRows, PostHogQueryOptions, Ranked } from './weekly-report.types.js';
 
 const TOP_COUNT = 3;
-// Local runs, preview deploys and events from outside these apps would otherwise count as users.
-const REAL_TRAFFIC =
-  "properties.app IS NOT NULL AND properties.environment NOT IN ('development', 'preview', 'test')";
+// The same rule the sender applies, so events stored before it did still count only from production.
+const REAL_TRAFFIC = `properties.app IS NOT NULL AND properties.environment = '${PRODUCTION_ENVIRONMENT}'`;
 const THIS_WEEK = 'timestamp >= now() - INTERVAL 7 DAY';
+// Page loads outnumber every action, so they get their own line instead of crowding the top list.
+const VISIT_EVENTS = "('page_viewed', 'web_ui_visited')";
+const IS_VISIT = `event IN ${VISIT_EVENTS}`;
+const IS_ACTION = `event NOT IN ${VISIT_EVENTS}`;
 
 const QUERIES = {
   totals: `SELECT properties.app, if(${THIS_WEEK}, 'current', 'previous') AS week,
-      count(), count(DISTINCT distinct_id)
+      countIf(${IS_ACTION}), countIf(${IS_VISIT}), count(DISTINCT distinct_id)
     FROM events WHERE timestamp >= now() - INTERVAL 14 DAY AND ${REAL_TRAFFIC}
     GROUP BY properties.app, week`,
   // "New" means first seen within the project's data retention window.
@@ -18,10 +22,10 @@ const QUERIES = {
       FROM events WHERE ${REAL_TRAFFIC} GROUP BY app, distinct_id
     ) WHERE first_seen >= now() - INTERVAL 7 DAY GROUP BY app`,
   byUser: `SELECT properties.app, distinct_id, count() FROM events
-    WHERE ${THIS_WEEK} AND ${REAL_TRAFFIC}
+    WHERE ${THIS_WEEK} AND ${REAL_TRAFFIC} AND ${IS_ACTION}
     GROUP BY properties.app, distinct_id ORDER BY count() DESC LIMIT ${TOP_COUNT} BY properties.app`,
   byEvent: `SELECT properties.app, event, count() FROM events
-    WHERE ${THIS_WEEK} AND ${REAL_TRAFFIC}
+    WHERE ${THIS_WEEK} AND ${REAL_TRAFFIC} AND ${IS_ACTION}
     GROUP BY properties.app, event ORDER BY count() DESC LIMIT ${TOP_COUNT} BY properties.app`,
 };
 
@@ -52,22 +56,26 @@ export function toAppWeeks(rows: {
       activeUsers: 0,
       previousActiveUsers: 0,
       newUsers: 0,
-      events: 0,
-      previousEvents: 0,
+      actions: 0,
+      previousActions: 0,
+      visits: 0,
+      previousVisits: 0,
       topUsers: [],
-      topEvents: [],
+      topActions: [],
     };
     weeks.set(app, created);
     return created;
   };
 
-  for (const [app, period, events, users] of rows.totals) {
+  for (const [app, period, actions, visits, users] of rows.totals) {
     const week = weekOf(String(app));
     if (period === 'current') {
-      week.events = Number(events);
+      week.actions = Number(actions);
+      week.visits = Number(visits);
       week.activeUsers = Number(users);
     } else {
-      week.previousEvents = Number(events);
+      week.previousActions = Number(actions);
+      week.previousVisits = Number(visits);
       week.previousActiveUsers = Number(users);
     }
   }
@@ -82,14 +90,16 @@ export function toAppWeeks(rows: {
     });
   }
   for (const [app, event, count] of rows.byEvent) {
-    weekOf(String(app)).topEvents.push({ name: String(event), count: Number(count) });
+    weekOf(String(app)).topActions.push({ name: String(event), count: Number(count) });
   }
-  return [...weeks.values()].sort((left, right) => right.events - left.events);
+  return [...weeks.values()].sort(
+    (left, right) => right.actions + right.visits - (left.actions + left.visits),
+  );
 }
 
 export function formatWeeklyReport({ weeks, now }: { weeks: AppWeek[]; now: Date }): string {
   const header = `📊 Weekly report, the 7 days to ${formatDay(now)}`;
-  const activeWeeks = weeks.filter((week) => week.events > 0 || week.previousEvents > 0);
+  const activeWeeks = weeks.filter(hadActivity);
   if (activeWeeks.length === 0) {
     return `${header}\n\nNo activity in any app.`;
   }
@@ -98,12 +108,19 @@ export function formatWeeklyReport({ weeks, now }: { weeks: AppWeek[]; now: Date
       `▫️ ${week.app}`,
       `Active users: ${week.activeUsers} ${change({ current: week.activeUsers, previous: week.previousActiveUsers })}`,
       `New users: ${week.newUsers}`,
-      `Actions: ${week.events} ${change({ current: week.events, previous: week.previousEvents })}`,
+      `Visits: ${week.visits} ${change({ current: week.visits, previous: week.previousVisits })}`,
+      `Actions: ${week.actions} ${change({ current: week.actions, previous: week.previousActions })}`,
       ...listLine({ label: 'Top users', ranked: week.topUsers }),
-      ...listLine({ label: 'Top actions', ranked: week.topEvents }),
+      ...listLine({ label: 'Top actions', ranked: week.topActions }),
     ].join('\n'),
   );
   return [header, ...sections].join('\n\n');
+}
+
+function hadActivity(week: AppWeek): boolean {
+  return [week.actions, week.previousActions, week.visits, week.previousVisits].some(
+    (count) => count > 0,
+  );
 }
 
 function withoutAppPrefix({ distinctId, app }: { distinctId: string; app: string }): string {

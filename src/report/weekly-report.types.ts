@@ -6,10 +6,12 @@ export type AppWeek = {
   activeUsers: number;
   previousActiveUsers: number;
   newUsers: number;
-  events: number;
-  previousEvents: number;
+  actions: number;
+  previousActions: number;
+  visits: number;
+  previousVisits: number;
   topUsers: Ranked[];
-  topEvents: Ranked[];
+  topActions: Ranked[];
 };
 
 export type HogQLCell = string | number | boolean | null;

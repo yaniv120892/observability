@@ -12,10 +12,30 @@ describe('loadObservabilityConfig', () => {
   });
 
   it('turns product analytics on with a PostHog key, in the EU region by default', () => {
-    expect(loadObservabilityConfig({}).productAnalytics).toBeNull();
-    expect(loadObservabilityConfig({ POSTHOG_PROJECT_KEY: 'phc_x' }).productAnalytics).toEqual({
+    expect(loadObservabilityConfig({ NODE_ENV: 'production' }).productAnalytics).toBeNull();
+    expect(
+      loadObservabilityConfig({ NODE_ENV: 'production', POSTHOG_PROJECT_KEY: 'phc_x' })
+        .productAnalytics,
+    ).toEqual({
       projectKey: 'phc_x',
       host: 'https://eu.i.posthog.com',
     });
+  });
+
+  it('keeps product analytics off outside production, so only real traffic spends quota', () => {
+    const withKey = { POSTHOG_PROJECT_KEY: 'phc_x' };
+    expect(loadObservabilityConfig(withKey).productAnalytics).toBeNull();
+    expect(
+      loadObservabilityConfig({ ...withKey, NODE_ENV: 'production', VERCEL_ENV: 'preview' })
+        .productAnalytics,
+    ).toBeNull();
+    expect(
+      loadObservabilityConfig({ ...withKey, NODE_ENV: 'production', VERCEL_ENV: 'production' })
+        .productAnalytics,
+    ).not.toBeNull();
+    expect(
+      loadObservabilityConfig({ ...withKey, NODE_ENV: 'development', VERCEL_ENV: 'production' })
+        .productAnalytics,
+    ).toBeNull();
   });
 });
