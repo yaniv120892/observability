@@ -1,3 +1,5 @@
+import type { Logger } from 'pino';
+
 export type Ranked = { name: string; count: number };
 
 /** One app's last seven days, next to the seven before for comparison. */
@@ -25,4 +27,5 @@ export type PostHogQueryOptions = {
   fetchImplementation?: typeof fetch;
   /** The pause before the first retry; each later retry waits that much longer again. */
   retryDelayMs?: number;
+  logger?: Logger;
 };
