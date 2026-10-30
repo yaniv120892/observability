@@ -8,9 +8,15 @@ const GAP = 24;
 const CONTENT_WIDTH = WIDTH - 2 * PADDING;
 const HEADER_HEIGHT = 130;
 const SUMMARY_HEIGHT = 150;
-const APP_CARD_HEIGHT = 200;
+const APP_CARD_HEIGHT = 222;
+const APPS_TOP = PADDING + HEADER_HEIGHT + SUMMARY_HEIGHT + GAP;
 const TILE_PADDING = 24;
 const BAR_HEIGHT = 8;
+const TOP_ACTIONS_MAX_LENGTH = 120;
+// Telegram refuses a photo whose width and height add up to more than this.
+const TELEGRAM_MAX_PHOTO_SIDES = 10_000;
+const PREFERRED_ZOOM = 2;
+const COMPACT_FROM = 10_000;
 const FONT = "Inter, 'Helvetica Neue', Helvetica, Arial, 'DejaVu Sans', sans-serif";
 
 const INK = {
@@ -28,31 +34,51 @@ const INK = {
 
 type Metric = { label: string; current: number; previous: number | null };
 
+type Box = { x: number; y: number; width: number };
+
 export function renderWeeklyDashboardPng({ weeks, now }: { weeks: AppWeek[]; now: Date }): Buffer {
   const svg = renderWeeklyDashboardSvg({ weeks, now });
-  return new Resvg(svg, { fitTo: { mode: 'zoom', value: 2 } }).render().asPng();
+  const height = dashboardHeight(weeks.filter(hadActivity).length);
+  const zoom = Math.min(PREFERRED_ZOOM, (TELEGRAM_MAX_PHOTO_SIDES - 1) / (WIDTH + height));
+  return new Resvg(svg, { fitTo: { mode: 'zoom', value: zoom } }).render().asPng();
 }
 
 export function renderWeeklyDashboardSvg({ weeks, now }: { weeks: AppWeek[]; now: Date }): string {
   const activeWeeks = weeks.filter(hadActivity);
-  const appsTop = PADDING + HEADER_HEIGHT + SUMMARY_HEIGHT + GAP;
-  const height =
-    activeWeeks.length === 0
-      ? appsTop + PADDING
-      : appsTop + activeWeeks.length * (APP_CARD_HEIGHT + GAP) - GAP + PADDING;
-  const body = [
-    header(now),
-    summary(activeWeeks),
-    ...activeWeeks.map((week, index) =>
-      appCard({ week, top: appsTop + index * (APP_CARD_HEIGHT + GAP) }),
-    ),
-  ];
+  const height = dashboardHeight(activeWeeks.length);
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${height}" viewBox="0 0 ${WIDTH} ${height}" font-family="${FONT}">`,
     `<rect width="${WIDTH}" height="${height}" fill="${INK.surface}"/>`,
-    ...body,
+    header(now),
+    summary(activeWeeks),
+    ...activeWeeks.map((week, index) =>
+      appCard({ week, top: APPS_TOP + index * (APP_CARD_HEIGHT + GAP) }),
+    ),
     '</svg>',
   ].join('\n');
+}
+
+function dashboardHeight(appCount: number): number {
+  const appsHeight = Math.max(0, appCount * (APP_CARD_HEIGHT + GAP) - GAP);
+  return APPS_TOP + appsHeight + PADDING;
+}
+
+function weekMetrics(week: AppWeek): Metric[] {
+  return [
+    { label: 'Active users', current: week.activeUsers, previous: week.previousActiveUsers },
+    { label: 'New users', current: week.newUsers, previous: null },
+    { label: 'Visits', current: week.visits, previous: week.previousVisits },
+    { label: 'Actions', current: week.actions, previous: week.previousActions },
+  ];
+}
+
+function summedMetric({ weeks, label }: { weeks: AppWeek[]; label: string }): Metric {
+  const perApp = weeks.map((week) => weekMetrics(week).find((metric) => metric.label === label));
+  return {
+    label,
+    current: perApp.reduce((sum, metric) => sum + (metric?.current ?? 0), 0),
+    previous: perApp.reduce((sum, metric) => sum + (metric?.previous ?? 0), 0),
+  };
 }
 
 function header(now: Date): string {
@@ -89,190 +115,161 @@ function legendItem({
 }
 
 function summary(weeks: AppWeek[]): string {
-  const total = (pick: (week: AppWeek) => number): number =>
-    weeks.reduce((sum, week) => sum + pick(week), 0);
   const top = PADDING + HEADER_HEIGHT;
   const heroWidth = (CONTENT_WIDTH - GAP) / 2;
   const sideWidth = (CONTENT_WIDTH - heroWidth - 2 * GAP) / 2;
-  const sideMetrics: Metric[] = [
-    {
-      label: 'Visits',
-      current: total((week) => week.visits),
-      previous: total((week) => week.previousVisits),
-    },
-    {
-      label: 'Actions',
-      current: total((week) => week.actions),
-      previous: total((week) => week.previousActions),
-    },
-  ];
+  const appCount = `${weeks.length} ${weeks.length === 1 ? 'app' : 'apps'}`;
+  const hero: Metric = {
+    ...summedMetric({ weeks, label: 'Active users' }),
+    // A person active in two apps counts in both, so the label says it is a sum.
+    label: `Active users, summed across ${appCount}`,
+  };
+  const sideMetrics = ['Visits', 'Actions'].map((label) => summedMetric({ weeks, label }));
   return [
     card({ x: PADDING, y: top, width: heroWidth, height: SUMMARY_HEIGHT }),
-    text({
-      x: PADDING + TILE_PADDING,
-      y: top + 40,
-      size: 17,
-      fill: INK.secondary,
-      content: `Active users across ${weeks.length} ${weeks.length === 1 ? 'app' : 'apps'}`,
-    }),
-    valueWithDelta({
-      x: PADDING + TILE_PADDING,
-      y: top + 110,
-      size: 60,
-      metric: {
-        label: 'Active users',
-        current: total((week) => week.activeUsers),
-        previous: total((week) => week.previousActiveUsers),
-      },
+    metricTile({
+      box: { x: PADDING + TILE_PADDING, y: top, width: heroWidth - 2 * TILE_PADDING },
+      metric: hero,
+      valueSize: 60,
     }),
     ...sideMetrics.map((metric, index) => {
       const x = PADDING + heroWidth + GAP + index * (sideWidth + GAP);
       return [
         card({ x, y: top, width: sideWidth, height: SUMMARY_HEIGHT }),
-        metricTile({ x: x + TILE_PADDING, y: top, width: sideWidth - 2 * TILE_PADDING, metric }),
+        metricTile({
+          box: { x: x + TILE_PADDING, y: top, width: sideWidth - 2 * TILE_PADDING },
+          metric,
+          valueSize: 40,
+        }),
       ].join('\n');
     }),
   ].join('\n');
 }
 
 function appCard({ week, top }: { week: AppWeek; top: number }): string {
-  const metrics: Metric[] = [
-    { label: 'Active users', current: week.activeUsers, previous: week.previousActiveUsers },
-    { label: 'New users', current: week.newUsers, previous: null },
-    { label: 'Visits', current: week.visits, previous: week.previousVisits },
-    { label: 'Actions', current: week.actions, previous: week.previousActions },
-  ];
+  const metrics = weekMetrics(week);
   const innerWidth = CONTENT_WIDTH - 2 * TILE_PADDING;
   const tileWidth = (innerWidth - (metrics.length - 1) * GAP) / metrics.length;
   const topActions = week.topActions
     .map((action) => `${action.name} ${action.count}`)
     .join('  ·  ');
-  return [
+  const parts = [
     card({ x: PADDING, y: top, width: CONTENT_WIDTH, height: APP_CARD_HEIGHT }),
     text({ x: PADDING + TILE_PADDING, y: top + 42, size: 24, weight: 700, content: week.app }),
-    topActions
-      ? text({
-          x: WIDTH - PADDING - TILE_PADDING,
-          y: top + 40,
-          size: 15,
-          fill: INK.secondary,
-          anchor: 'end',
-          content: `Top actions: ${topActions}`,
-        })
-      : '',
     ...metrics.map((metric, index) =>
       metricTile({
-        x: PADDING + TILE_PADDING + index * (tileWidth + GAP),
-        y: top + 50,
-        width: tileWidth,
+        box: {
+          x: PADDING + TILE_PADDING + index * (tileWidth + GAP),
+          y: top + 50,
+          width: tileWidth,
+        },
         metric,
+        valueSize: 40,
       }),
     ),
-  ].join('\n');
+  ];
+  if (topActions) {
+    parts.push(
+      text({
+        x: PADDING + TILE_PADDING,
+        y: top + APP_CARD_HEIGHT - 22,
+        size: 15,
+        fill: INK.secondary,
+        content: truncate(`Top actions: ${topActions}`),
+      }),
+    );
+  }
+  return parts.join('\n');
 }
 
 function metricTile({
-  x,
-  y,
-  width,
+  box,
   metric,
+  valueSize,
 }: {
-  x: number;
-  y: number;
-  width: number;
+  box: Box;
   metric: Metric;
+  valueSize: number;
 }): string {
+  const valueY = box.y + 48 + valueSize * 0.8;
   const parts = [
-    text({ x, y: y + 40, size: 16, fill: INK.secondary, content: metric.label }),
-    valueWithDelta({ x, y: y + 88, size: 40, metric }),
+    text({ x: box.x, y: box.y + 40, size: 16, fill: INK.secondary, content: metric.label }),
+    text({
+      x: box.x,
+      y: valueY,
+      size: valueSize,
+      weight: 600,
+      content: formatCount(metric.current),
+    }),
   ];
   if (metric.previous === null) {
-    parts.push(text({ x, y: y + 122, size: 14, fill: INK.secondary, content: 'Joined this week' }));
+    parts.push(
+      text({
+        x: box.x,
+        y: valueY + 34,
+        size: 14,
+        fill: INK.secondary,
+        content: 'Joined this week',
+      }),
+    );
   } else {
     parts.push(
-      comparisonBars({ x, y: y + 106, width, current: metric.current, previous: metric.previous }),
+      // resvg cannot measure text, so the change sits at the tile's right edge instead of after the value.
+      delta({ right: box.x + box.width, y: valueY - 8, ...metric, previous: metric.previous }),
+      comparisonBars({ box: { ...box, y: valueY + 18 }, ...metric, previous: metric.previous }),
     );
   }
   return parts.join('\n');
 }
 
 function comparisonBars({
-  x,
-  y,
-  width,
+  box,
   current,
   previous,
 }: {
-  x: number;
-  y: number;
-  width: number;
+  box: Box;
   current: number;
   previous: number;
 }): string {
   const scale = Math.max(current, previous, 1);
-  const barWidth = (count: number): number => Math.max((count / scale) * width, count > 0 ? 4 : 0);
+  const barWidth = (count: number): number =>
+    Math.max((count / scale) * box.width, count > 0 ? 4 : 0);
   return [
-    `<rect x="${x}" y="${y}" width="${barWidth(current)}" height="${BAR_HEIGHT}" rx="4" fill="${INK.thisWeek}"/>`,
-    `<rect x="${x}" y="${y + BAR_HEIGHT + 4}" width="${barWidth(previous)}" height="${BAR_HEIGHT}" rx="4" fill="${INK.lastWeek}"/>`,
-  ].join('\n');
-}
-
-function valueWithDelta({
-  x,
-  y,
-  size,
-  metric,
-}: {
-  x: number;
-  y: number;
-  size: number;
-  metric: Metric;
-}): string {
-  const value = formatCount(metric.current);
-  // resvg cannot measure text, so the delta's offset estimates the value's width from its digits.
-  const deltaX = x + value.length * size * 0.6 + 14;
-  return [
-    text({ x, y, size, weight: 600, content: value }),
-    metric.previous === null
-      ? ''
-      : delta({
-          x: deltaX,
-          y: y - size * 0.12,
-          current: metric.current,
-          previous: metric.previous,
-        }),
+    `<rect x="${box.x}" y="${box.y}" width="${barWidth(current)}" height="${BAR_HEIGHT}" rx="4" fill="${INK.thisWeek}"/>`,
+    `<rect x="${box.x}" y="${box.y + BAR_HEIGHT + 4}" width="${barWidth(previous)}" height="${BAR_HEIGHT}" rx="4" fill="${INK.lastWeek}"/>`,
   ].join('\n');
 }
 
 function delta({
-  x,
+  right,
   y,
   current,
   previous,
 }: {
-  x: number;
+  right: number;
   y: number;
   current: number;
   previous: number;
 }): string {
   const difference = current - previous;
   if (difference === 0) {
-    return text({ x, y, size: 17, fill: INK.secondary, content: 'same' });
+    return text({ x: right, y, size: 17, fill: INK.secondary, anchor: 'end', content: 'same' });
   }
   const isUp = difference > 0;
+  const triangleLeft = right - 14;
   const triangle = isUp
-    ? `M${x} ${y} L${x + 14} ${y} L${x + 7} ${y - 12} Z`
-    : `M${x} ${y - 12} L${x + 14} ${y - 12} L${x + 7} ${y} Z`;
-  const label = `${isUp ? '+' : '−'}${formatCount(Math.abs(difference))}`;
+    ? `M${triangleLeft} ${y} L${right} ${y} L${triangleLeft + 7} ${y - 12} Z`
+    : `M${triangleLeft} ${y - 12} L${right} ${y - 12} L${triangleLeft + 7} ${y} Z`;
   return [
     `<path d="${triangle}" fill="${isUp ? INK.upIcon : INK.down}"/>`,
     text({
-      x: x + 20,
+      x: triangleLeft - 6,
       y,
       size: 17,
       weight: 600,
       fill: isUp ? INK.upText : INK.down,
-      content: label,
+      anchor: 'end',
+      content: `${isUp ? '+' : '−'}${formatCount(Math.abs(difference))}`,
     }),
   ].join('\n');
 }
@@ -311,10 +308,15 @@ function text({
   return `<text x="${x}" y="${y}" font-size="${size}" font-weight="${weight}" fill="${fill}" text-anchor="${anchor}">${escapeXml(content)}</text>`;
 }
 
+function truncate(value: string): string {
+  return value.length > TOP_ACTIONS_MAX_LENGTH
+    ? `${value.slice(0, TOP_ACTIONS_MAX_LENGTH - 1)}…`
+    : value;
+}
+
 function formatCount(count: number): string {
-  return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(
-    count,
-  );
+  const notation = count >= COMPACT_FROM ? 'compact' : 'standard';
+  return new Intl.NumberFormat('en', { notation, maximumFractionDigits: 1 }).format(count);
 }
 
 function escapeXml(value: string): string {

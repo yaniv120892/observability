@@ -17,25 +17,20 @@ export async function sendTelegramMessage({
   text: string;
   fetchImplementation?: typeof fetch;
 }): Promise<void> {
-  const response = await fetchImplementation(
-    `https://api.telegram.org/bot${botToken}/sendMessage`,
-    {
-      method: 'POST',
+  await callTelegram({
+    botToken,
+    method: 'sendMessage',
+    request: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
         text: text.slice(0, TELEGRAM_MAX_MESSAGE_LENGTH),
         disable_web_page_preview: true,
       }),
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     },
-  );
-  if (!response.ok) {
-    // The URL carries the bot token, so it stays out of the error; Telegram's
-    // reason ("Bad Request: chat not found") is what says how to fix it.
-    const reason = await readTelegramReason(response);
-    throw new Error(`Telegram sendMessage answered ${response.status}: ${reason}`);
-  }
+    timeoutMs: SEND_TIMEOUT_MS,
+    fetchImplementation,
+  });
 }
 
 export async function sendTelegramPhoto({
@@ -54,14 +49,38 @@ export async function sendTelegramPhoto({
   const form = new FormData();
   form.append('chat_id', chatId);
   form.append('photo', new Blob([Uint8Array.from(photo)], { type: 'image/png' }), fileName);
-  const response = await fetchImplementation(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+  await callTelegram({
+    botToken,
+    method: 'sendPhoto',
+    request: { body: form },
+    timeoutMs: PHOTO_SEND_TIMEOUT_MS,
+    fetchImplementation,
+  });
+}
+
+async function callTelegram({
+  botToken,
+  method,
+  request,
+  timeoutMs,
+  fetchImplementation,
+}: {
+  botToken: string;
+  method: string;
+  request: RequestInit;
+  timeoutMs: number;
+  fetchImplementation: typeof fetch;
+}): Promise<void> {
+  const response = await fetchImplementation(`https://api.telegram.org/bot${botToken}/${method}`, {
+    ...request,
     method: 'POST',
-    body: form,
-    signal: AbortSignal.timeout(PHOTO_SEND_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
+    // The URL carries the bot token, so it stays out of the error; Telegram's
+    // reason ("Bad Request: chat not found") is what says how to fix it.
     const reason = await readTelegramReason(response);
-    throw new Error(`Telegram sendPhoto answered ${response.status}: ${reason}`);
+    throw new Error(`Telegram ${method} answered ${response.status}: ${reason}`);
   }
 }
 

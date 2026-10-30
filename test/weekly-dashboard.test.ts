@@ -6,9 +6,13 @@ import {
 import type { AppWeek } from '../src/report/weekly-report.types.js';
 
 const NOW = new Date('2026-11-01T07:00:00Z');
+const TELEGRAM_MAX_PHOTO_SIDES = 10_000;
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47];
 
-function appWeek(overrides: Partial<AppWeek> & { app: string }): AppWeek {
+// Any week fields a test cares about; the rest are zero.
+type AppWeekOverrides = Partial<AppWeek> & { app: string };
+
+function appWeek(overrides: AppWeekOverrides): AppWeek {
   return {
     activeUsers: 0,
     previousActiveUsers: 0,
@@ -47,8 +51,36 @@ describe('weekly dashboard', () => {
     expect(svg).toContain('>−30<');
     expect(svg).toContain('>same<');
     expect(svg).toContain('Top actions: expense_created 80');
-    expect(svg).toContain('Active users across 1 app');
+    expect(svg).toContain('Active users, summed across 1 app');
     expect(svg).not.toContain('quiet-app');
+  });
+
+  it('shows exact numbers below ten thousand and compacts the rest', () => {
+    const svg = renderWeeklyDashboardSvg({
+      now: NOW,
+      weeks: [appWeek({ app: 'expenses', visits: 1249, previousVisits: 1150, actions: 12_900 })],
+    });
+
+    expect(svg).toContain('>1,249<');
+    expect(svg).toContain('>+99<');
+    expect(svg).toContain('>12.9K<');
+  });
+
+  it('cuts a long top-actions line short', () => {
+    const longName = 'a_very_long_event_name_that_keeps_going';
+    const svg = renderWeeklyDashboardSvg({
+      now: NOW,
+      weeks: [
+        appWeek({
+          app: 'expenses',
+          actions: 3,
+          topActions: [1, 2, 3, 4].map((count) => ({ name: `${longName}_${count}`, count })),
+        }),
+      ],
+    });
+
+    expect(svg).toContain('…<');
+    expect(svg).not.toContain(`${longName}_4`);
   });
 
   it('escapes names that would break the SVG', () => {
@@ -67,5 +99,17 @@ describe('weekly dashboard', () => {
     });
 
     expect([...png.subarray(0, 4)]).toEqual(PNG_SIGNATURE);
+  });
+
+  it('keeps a picture of many apps within the size Telegram accepts', () => {
+    const weeks = Array.from({ length: 40 }, (_, index) =>
+      appWeek({ app: `app-${index}`, actions: 1 }),
+    );
+
+    const png = renderWeeklyDashboardPng({ now: NOW, weeks });
+
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
+    expect(width + height).toBeLessThanOrEqual(TELEGRAM_MAX_PHOTO_SIDES);
   });
 });
