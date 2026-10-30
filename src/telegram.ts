@@ -1,4 +1,5 @@
 const SEND_TIMEOUT_MS = 5000;
+const PHOTO_SEND_TIMEOUT_MS = 20_000;
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 
 /**
@@ -34,6 +35,33 @@ export async function sendTelegramMessage({
     // reason ("Bad Request: chat not found") is what says how to fix it.
     const reason = await readTelegramReason(response);
     throw new Error(`Telegram sendMessage answered ${response.status}: ${reason}`);
+  }
+}
+
+export async function sendTelegramPhoto({
+  botToken,
+  chatId,
+  photo,
+  fileName,
+  fetchImplementation = fetch,
+}: {
+  botToken: string;
+  chatId: string;
+  photo: Uint8Array;
+  fileName: string;
+  fetchImplementation?: typeof fetch;
+}): Promise<void> {
+  const form = new FormData();
+  form.append('chat_id', chatId);
+  form.append('photo', new Blob([Uint8Array.from(photo)], { type: 'image/png' }), fileName);
+  const response = await fetchImplementation(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(PHOTO_SEND_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const reason = await readTelegramReason(response);
+    throw new Error(`Telegram sendPhoto answered ${response.status}: ${reason}`);
   }
 }
 

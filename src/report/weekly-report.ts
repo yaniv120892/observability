@@ -117,7 +117,7 @@ export function formatWeeklyReport({ weeks, now }: { weeks: AppWeek[]; now: Date
   return [header, ...sections].join('\n\n');
 }
 
-function hadActivity(week: AppWeek): boolean {
+export function hadActivity(week: AppWeek): boolean {
   return [week.actions, week.previousActions, week.visits, week.previousVisits].some(
     (count) => count > 0,
   );
@@ -144,7 +144,7 @@ function listLine({ label, ranked }: { label: string; ranked: Ranked[] }): strin
   return [`${label}: ${ranked.map((entry) => `${entry.name} (${entry.count})`).join(', ')}`];
 }
 
-function formatDay(date: Date): string {
+export function formatDay(date: Date): string {
   return date.toLocaleDateString('en-GB', {
     day: '2-digit',
     month: '2-digit',
