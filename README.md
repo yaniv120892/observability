@@ -234,7 +234,8 @@ needs `https://us.i.posthog.com`, or its events are rejected.
 `.github/workflows/weekly-report.yml` runs every Sunday at 09:00 Israel time and sends a dashboard
 picture to Telegram, then a text message with the same numbers. Per app it shows active users, new
 users, visits and actions against the week before, and the top actions; the text adds the top users.
-If the picture cannot be drawn or sent, the text still goes out. It counts `production` events only. It needs the
+If the picture cannot be drawn or sent, the text still goes out. A PostHog query that times out or hits a
+server error is tried up to three times before the run fails. It counts `production` events only. It needs the
 `POSTHOG_PROJECT_ID` repository variable (and `POSTHOG_API_HOST`, `https://us.posthog.com`, for a
 US-region project), a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
 only the `query:read` scope), and the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_ID` secrets.

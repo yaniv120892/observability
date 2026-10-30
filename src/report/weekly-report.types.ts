@@ -23,4 +23,6 @@ export type PostHogQueryOptions = {
   projectId: string;
   personalApiKey: string;
   fetchImplementation?: typeof fetch;
+  /** The pause before the first retry; each later retry waits that much longer again. */
+  retryDelayMs?: number;
 };

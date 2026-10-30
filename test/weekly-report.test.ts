@@ -4,6 +4,13 @@ import { collectWeeklyStats, formatWeeklyReport, toAppWeeks } from '../src/repor
 import { jsonBodyOf } from './fakes/recording-fetch.js';
 
 const NOW = new Date('2026-11-01T07:00:00Z');
+const QUERY_OPTIONS = {
+  query: 'SELECT 1',
+  apiHost: 'https://eu.posthog.com',
+  projectId: '123',
+  personalApiKey: 'phx_secret',
+  retryDelayMs: 0,
+};
 
 describe('weekly report', () => {
   it('builds each app week from the query rows, without the app prefix on users', () => {
@@ -151,5 +158,30 @@ describe('weekly report', () => {
         fetchImplementation,
       }),
     ).rejects.toThrow('PostHog query answered 403: bad key');
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a query PostHog timed out on, and returns the rows of the retry', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('max execution time', { status: 504 }))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ results: [['expenses', 3]] })));
+
+    const rows = await runHogQLQuery({ ...QUERY_OPTIONS, fetchImplementation });
+
+    expect(rows).toEqual([['expenses', 3]]);
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up after three attempts and names the last answer', async () => {
+    const fetchImplementation = vi.fn(
+      async () => new Response('max execution time', { status: 504 }),
+    );
+
+    await expect(runHogQLQuery({ ...QUERY_OPTIONS, fetchImplementation })).rejects.toThrow(
+      'PostHog query answered 504: max execution time',
+    );
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
   });
 });
