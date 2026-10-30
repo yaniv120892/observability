@@ -1,6 +1,6 @@
 {
   "name": "@yaniv120892/observability",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Logging (pino to Better Stack), Sentry, heartbeats, Telegram ops alerts and PostHog product events for my apps",
   "license": "MIT",
   "type": "module",
@@ -63,6 +63,7 @@
     }
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@sentry/nextjs": "^11.9.0",
     "@sentry/node": "^11.9.0",
     "@types/node": "^22.20.5",
