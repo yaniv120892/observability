@@ -18,6 +18,7 @@ const weeks = await collectWeeklyStats({
   apiHost: process.env.POSTHOG_API_HOST?.trim() || DEFAULT_POSTHOG_API_HOST,
   projectId: required('POSTHOG_PROJECT_ID'),
   personalApiKey: required('POSTHOG_PERSONAL_API_KEY'),
+  logger,
 });
 const dashboard = await deliverWeeklyReport({
   weeks,
