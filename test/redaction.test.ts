@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { REDACTED, redactSecrets } from '../src/redaction.js';
+import { REDACTED, redactSensitive } from '../src/redaction.js';
 
 const PSEUDONYM = /^sha256:[0-9a-f]{12}$/;
 
-describe('redactSecrets', () => {
+describe('redactSensitive', () => {
   it.each([
     'token',
     'accessToken',
@@ -30,7 +30,7 @@ describe('redactSecrets', () => {
     'DATABASE_URL',
     'privateKeyPem',
   ])('redacts %s', (key) => {
-    expect(redactSecrets({ context: { [key]: 'plain' } })).toEqual({ [key]: REDACTED });
+    expect(redactSensitive({ context: { [key]: 'plain' } })).toEqual({ [key]: REDACTED });
   });
 
   it.each([
@@ -50,11 +50,11 @@ describe('redactSecrets', () => {
     'today',
     'toolName',
   ])('keeps %s', (key) => {
-    expect(redactSecrets({ context: { [key]: 'plain' } })).toEqual({ [key]: 'plain' });
+    expect(redactSensitive({ context: { [key]: 'plain' } })).toEqual({ [key]: 'plain' });
   });
 
   it('replaces an email, a phone and a recipient address with a short stable hash', () => {
-    const redacted = redactSecrets({
+    const redacted = redactSensitive({
       context: {
         email: 'Dana@Example.com ',
         userEmail: 'dana@example.com',
@@ -71,12 +71,12 @@ describe('redactSecrets', () => {
 
   it('keeps a boolean, null or undefined under a secret name', () => {
     expect(
-      redactSecrets({ context: { hasPassword: true, token: null, apiKey: undefined } }),
+      redactSensitive({ context: { hasPassword: true, token: null, apiKey: undefined } }),
     ).toEqual({ hasPassword: true, token: null, apiKey: undefined });
   });
 
   it('hashes a to only when it holds an address', () => {
-    const redacted = redactSecrets({
+    const redacted = redactSensitive({
       context: {
         email: { to: 'dana@example.com' },
         sms: { to: '+972 50-123-4567' },
@@ -97,14 +97,14 @@ describe('redactSecrets', () => {
       public readonly user = 'dana';
       public readonly password = 'plain';
     }
-    expect(redactSecrets({ context: { login: new Credentials() } })).toEqual({
+    expect(redactSensitive({ context: { login: new Credentials() } })).toEqual({
       login: { user: 'dana', password: REDACTED },
     });
   });
 
   it('walks into objects and arrays up to three levels deep', () => {
     expect(
-      redactSecrets({
+      redactSensitive({
         context: {
           member: { contact: { email: 'dana@example.com' } },
           accounts: [{ apiKey: 'plain' }],
@@ -119,8 +119,10 @@ describe('redactSecrets', () => {
   });
 
   it('redacts app-specific keys in any case', () => {
-    expect(redactSecrets({ context: { SetupCode: 'plain' }, secretKeys: ['setupCode'] })).toEqual({
-      SetupCode: REDACTED,
-    });
+    expect(redactSensitive({ context: { SetupCode: 'plain' }, secretKeys: ['setupCode'] })).toEqual(
+      {
+        SetupCode: REDACTED,
+      },
+    );
   });
 });

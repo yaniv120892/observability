@@ -1,4 +1,4 @@
-import { REDACTED, redactSecrets } from './redaction.js';
+import { REDACTED, redactSensitive } from './redaction.js';
 import type {
   ErrorReportCaptureContext,
   SentryCaptureInput,
@@ -40,7 +40,7 @@ export function toSentryCaptureContext({
   secretKeys,
   tagKeys = [],
 }: SentryCaptureInput): ErrorReportCaptureContext {
-  const extra = redactSecrets({ context, secretKeys });
+  const extra = redactSensitive({ context, secretKeys });
   const allowedStringKeys = new Set([...DEFAULT_SENTRY_TAG_KEYS, ...tagKeys]);
   const tagEntries = Object.entries(extra).filter((entry): entry is [string, SentryTagValue] =>
     isTag({ entry, allowedStringKeys }),

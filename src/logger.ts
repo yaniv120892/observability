@@ -13,7 +13,7 @@ type CreateLoggerOptions = {
   service: string;
   level: string;
   destinations: DestinationStream[];
-  /** Exact field names, in any case, to redact on top of the default patterns; see `redactSecrets`. */
+  /** Exact field names, in any case, to redact on top of the default patterns; see `redactSensitive`. */
   secretKeys?: string[];
   /** Human-readable output through pino-pretty, for a local dev server. */
   pretty?: boolean;

@@ -2,7 +2,7 @@ import type { Logger } from 'pino';
 import { rewrittenMessage, withholdPrismaMessages } from './error-message.js';
 import { beforeDeadline, DEADLINE_PASSED } from './deadline.js';
 import type { ErrorMessage } from './error-message.types.js';
-import { redactSecrets } from './redaction.js';
+import { redactSensitive } from './redaction.js';
 import { sendTelegramMessage } from './telegram.js';
 import type { AlertCounter, OpsAlert } from './ops-alerter.types.js';
 
@@ -129,7 +129,10 @@ export class OpsAlerter {
     if (message) {
       lines.push(message);
     }
-    const redactedContext = redactSecrets({ context: context ?? {}, secretKeys: this.secretKeys });
+    const redactedContext = redactSensitive({
+      context: context ?? {},
+      secretKeys: this.secretKeys,
+    });
     for (const [key, value] of Object.entries(redactedContext)) {
       if (value !== undefined && value !== null) {
         lines.push(`${key}: ${value}`);

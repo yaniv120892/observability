@@ -11,10 +11,7 @@ const PSEUDONYM_LENGTH = 12;
 /** Keys can be dynamic (an id used as a key), so the memo of judged keys stops growing here. */
 const MAX_JUDGED_KEYS = 1000;
 
-/**
- * Matched against a key's last word, or its last two words joined: `x-api-key`, `inviteCode`.
- * A word ending in `token`, `secret` or `password` matches through `SECRET_SUFFIXES` instead.
- */
+/** Matched against a key's last word, or its last two words joined: `x-api-key`, `inviteCode`. */
 const SECRET_NAMES = new Set([
   'passwd',
   'passphrase',
@@ -61,7 +58,7 @@ type RedactionRules = { secretKeys: Set<string>; judgedKeys: Map<string, KeyTrea
  * secrets while `statusCode` and `tokenCount` are not; a boolean under a secret's name, such as
  * `hasPassword`, is kept. `secretKeys` adds exact names, in any case.
  */
-export function redactSecrets({
+export function redactSensitive({
   context,
   secretKeys = [],
 }: {
@@ -114,8 +111,10 @@ function redactEntry({
   depth: number;
 }): unknown {
   switch (treatment) {
-    case 'redact':
-      return typeof value === 'boolean' || value === null || value === undefined ? value : REDACTED;
+    case 'redact': {
+      const cannotHoldASecret = typeof value === 'boolean' || value === null || value === undefined;
+      return cannotHoldASecret ? value : REDACTED;
+    }
     case 'pseudonymize':
       return pseudonymized({ value, rules, depth, isAddress: isHashable });
     case 'pseudonymize-recipient':
