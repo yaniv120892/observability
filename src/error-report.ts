@@ -13,7 +13,7 @@ const MAX_TAG_VALUE_LENGTH = 200;
  * Context keys whose string values name a kind of thing rather than a person or a record, so they
  * are safe to index and group by. Any other string stays in `extra`, which Sentry does not index.
  */
-export const DEFAULT_SENTRY_TAG_KEYS = [
+export const DEFAULT_SENTRY_TAG_KEYS: readonly string[] = Object.freeze([
   'method',
   'route',
   'routePath',
@@ -26,7 +26,7 @@ export const DEFAULT_SENTRY_TAG_KEYS = [
   'operation',
   'currency',
   'locale',
-];
+]);
 
 /**
  * Every context value goes to `extra`, censored as the logger censors it. A number or a boolean is

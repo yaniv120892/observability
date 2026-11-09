@@ -39,6 +39,27 @@ describe('OpsAlerter', () => {
     );
   });
 
+  it('redacts secrets and hashes contact details in the context it sends', async () => {
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const alerter = new OpsAlerter({
+      service: 'my-app',
+      telegram,
+      logger: silentLogger,
+      fetchImplementation,
+      secretKeys: ['setupCode'],
+    });
+    await alerter.alert({
+      alertType: 'invite',
+      title: 'Invite failed',
+      context: { email: 'dana@example.com', inviteCode: 'plain', setupCode: 'plain', route: '/x' },
+    });
+    const text = textOf(requests[0]);
+    expect(text).not.toMatch(/plain|dana@example\.com/);
+    expect(text).toMatch(
+      /email: sha256:[0-9a-f]{12}\ninviteCode: \[redacted\]\nsetupCode: \[redacted\]\nroute: \/x$/,
+    );
+  });
+
   it('counts in this instance when the shared counter does not answer within a second', async () => {
     vi.useFakeTimers();
     const { requests, fetchImplementation } = createRecordingFetch();
@@ -58,7 +79,7 @@ describe('OpsAlerter', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await alerting;
     expect(requests).toHaveLength(1);
-    expect(warnings).toContain('ops_alert_counter_timed_out');
+    expect(warnings).toContain('ops_alert_counter_failed');
   });
 
   it('is inert without Telegram credentials', async () => {

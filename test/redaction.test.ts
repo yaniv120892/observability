@@ -24,6 +24,11 @@ describe('redactSecrets', () => {
     'invite_code',
     'privateKey',
     'credentials',
+    'authCode',
+    'apiKeys',
+    'connectionString',
+    'DATABASE_URL',
+    'privateKeyPem',
   ])('redacts %s', (key) => {
     expect(redactSecrets({ context: { [key]: 'plain' } })).toEqual({ [key]: REDACTED });
   });
@@ -48,7 +53,7 @@ describe('redactSecrets', () => {
     expect(redactSecrets({ context: { [key]: 'plain' } })).toEqual({ [key]: 'plain' });
   });
 
-  it('replaces an email, a phone and a recipient with a short stable hash', () => {
+  it('replaces an email, a phone and a recipient address with a short stable hash', () => {
     const redacted = redactSecrets({
       context: {
         email: 'Dana@Example.com ',
@@ -62,6 +67,39 @@ describe('redactSecrets', () => {
     expect(redacted.phoneNumber).toMatch(PSEUDONYM);
     expect(redacted.to).toEqual([redacted.email, expect.stringMatching(PSEUDONYM)]);
     expect(JSON.stringify(redacted)).not.toMatch(/example\.com|501234567/);
+  });
+
+  it('keeps a boolean, null or undefined under a secret name', () => {
+    expect(
+      redactSecrets({ context: { hasPassword: true, token: null, apiKey: undefined } }),
+    ).toEqual({ hasPassword: true, token: null, apiKey: undefined });
+  });
+
+  it('hashes a to only when it holds an address', () => {
+    const redacted = redactSecrets({
+      context: {
+        email: { to: 'dana@example.com' },
+        sms: { to: '+972 50-123-4567' },
+        range: { from: '2026-10-01', to: '2026-10-31' },
+        redirect: { to: '/login' },
+      },
+    });
+    expect(redacted).toEqual({
+      email: { to: expect.stringMatching(PSEUDONYM) },
+      sms: { to: expect.stringMatching(PSEUDONYM) },
+      range: { from: '2026-10-01', to: '2026-10-31' },
+      redirect: { to: '/login' },
+    });
+  });
+
+  it('walks into a class instance that serializes as its own fields', () => {
+    class Credentials {
+      public readonly user = 'dana';
+      public readonly password = 'plain';
+    }
+    expect(redactSecrets({ context: { login: new Credentials() } })).toEqual({
+      login: { user: 'dana', password: REDACTED },
+    });
   });
 
   it('walks into objects and arrays up to three levels deep', () => {

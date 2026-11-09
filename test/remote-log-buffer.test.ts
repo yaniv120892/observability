@@ -148,6 +148,29 @@ describe('RemoteLogBuffer', () => {
     expect(sentBatches).toHaveLength(2);
   });
 
+  it('drains records written during the last send, for a shutdown', async () => {
+    const sentBatches: unknown[] = [];
+    const buffer = new RemoteLogBuffer({
+      sourceUrl: 'https://in.logs.example/source',
+      sourceToken: 'source-token',
+      shipLevel: 'warn',
+      service: 'my-app',
+      fetchImplementation: async (_input, init) => {
+        sentBatches.push(JSON.parse(String(init?.body)));
+        if (sentBatches.length === 1) {
+          buffer.write(line({ level: 'error', msg: 'request_failed_during_shutdown' }));
+        }
+        return new Response('');
+      },
+    });
+    buffer.write(line({ level: 'warn', msg: 'first' }));
+    await buffer.drain();
+    expect(sentBatches).toEqual([
+      [expect.objectContaining({ msg: 'first' })],
+      [expect.objectContaining({ msg: 'request_failed_during_shutdown' })],
+    ]);
+  });
+
   it('gives up waiting on a send that never settles after three seconds', async () => {
     vi.useFakeTimers();
     const buffer = new RemoteLogBuffer({

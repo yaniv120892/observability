@@ -2,6 +2,7 @@ import type { Logger } from 'pino';
 import { rewrittenMessage, withholdPrismaMessages } from './error-message.js';
 import { beforeDeadline, DEADLINE_PASSED } from './deadline.js';
 import type { ErrorMessage } from './error-message.types.js';
+import { redactSecrets } from './redaction.js';
 import { sendTelegramMessage } from './telegram.js';
 import type { AlertCounter, OpsAlert } from './ops-alerter.types.js';
 
@@ -13,6 +14,8 @@ type OpsAlerterOptions = {
   counter?: AlertCounter;
   /** Defaults to `withholdPrismaMessages`. */
   errorMessage?: ErrorMessage;
+  /** Exact field names to redact from an alert's context, on top of the logger's patterns. */
+  secretKeys?: string[];
   fetchImplementation?: typeof fetch;
 };
 
@@ -50,6 +53,7 @@ export class OpsAlerter {
   private readonly fallbackCounter = createInMemoryAlertCounter();
   private readonly fetchImplementation: typeof fetch;
   private readonly errorMessage: ErrorMessage;
+  private readonly secretKeys: string[];
 
   public constructor(options: OpsAlerterOptions) {
     this.service = options.service;
@@ -58,6 +62,7 @@ export class OpsAlerter {
     this.counter = options.counter ?? this.fallbackCounter;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
     this.errorMessage = options.errorMessage ?? withholdPrismaMessages;
+    this.secretKeys = options.secretKeys ?? [];
   }
 
   public async alert(alert: OpsAlert): Promise<void> {
@@ -101,7 +106,10 @@ export class OpsAlerter {
       if (count !== DEADLINE_PASSED) {
         return count;
       }
-      this.logger.warn({ timeoutMs: COUNTER_TIMEOUT_MS }, 'ops_alert_counter_timed_out');
+      this.logger.warn(
+        { reason: `no answer within ${COUNTER_TIMEOUT_MS} ms` },
+        'ops_alert_counter_failed',
+      );
     } catch (error) {
       this.logger.warn({ reason: this.describe(error) }, 'ops_alert_counter_failed');
     }
@@ -121,7 +129,8 @@ export class OpsAlerter {
     if (message) {
       lines.push(message);
     }
-    for (const [key, value] of Object.entries(context ?? {})) {
+    const redactedContext = redactSecrets({ context: context ?? {}, secretKeys: this.secretKeys });
+    for (const [key, value] of Object.entries(redactedContext)) {
       if (value !== undefined && value !== null) {
         lines.push(`${key}: ${value}`);
       }

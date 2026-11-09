@@ -64,6 +64,7 @@ function build({
     logger,
     counter: alertCounter,
     errorMessage,
+    secretKeys,
   });
   // On the global scope, so every event the server SDK sends is covered, its own captures
   // included, whether or not `initSentry` was given the same function.

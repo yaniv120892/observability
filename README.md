@@ -100,18 +100,23 @@ catches an error and returns a fallback calls `observability.reportError({ error
 so Sentry still sees it. In both entries, `context` reaches Sentry as `extra`, redacted as the
 logger redacts it. Its number and boolean values are also tags, next to the `where` tag, and so are
 its strings under the keys in `DEFAULT_SENTRY_TAG_KEYS` (`method`, `route`, `status`, `model` and a
-few more that name a kind of thing, not a person or a record). Pass `sentryTagKeys` to add keys; an
-id or an address stays out of tags, which Sentry indexes and keeps.
+few more that name a kind of thing, not a person or a record). Pass `sentryTagKeys` to add keys; a
+string id or an address stays out of tags, which Sentry indexes and keeps. A numeric id is still a
+tag, as every number is.
 
 ## Redaction
 
-Every log line, and every `context` sent to Sentry, is walked three levels deep. A key is judged by
-its words, whatever its case or separators: one that names a token, secret, password,
-authorization, cookie, API key, private key, OTP, invite code or credential (`refreshToken`,
-`x-api-key`, `OTP_CODE`, `passwordHash`) is replaced by `[redacted]`, while `statusCode`,
-`tokenCount` and `secretName` are kept. An `email`, a `phone` (`userEmail`, `phoneNumber`) and a
-`to` become `sha256:` and 12 hex characters of the lower-cased value's hash, so one person's lines
-still correlate without the address in them. `secretKeys` adds exact names, matched in any case.
+Every log line (a logged error's own fields and child-logger bindings included), every `context`
+sent to Sentry and every ops alert's context is walked three levels deep. A key is judged by its
+words, whatever its case or separators: one that names a token, secret, password, authorization,
+cookie, API key, private key, OTP, invite code, credential or connection string (`refreshToken`,
+`x-api-key`, `OTP_CODE`, `passwordHash`, `DATABASE_URL`) is replaced by `[redacted]`, unless it holds
+a boolean, while `statusCode`, `tokenCount` and `secretName` are kept. An `email` or a `phone`
+(`userEmail`, `phoneNumber`), and a `to` that holds an email address or an international phone
+number, become `sha256:` and 12 hex characters of the lower-cased value's hash, so one person's
+lines still correlate. The hash is not keyed: anyone with a candidate address can confirm it, so it
+keeps addresses out of plain sight, not out of reach. `secretKeys` adds exact names, matched in any
+case. Redaction by name is a safety net, not a licence: log ids, not personal data.
 
 Alerts are counted per serverless instance by default. An app with Redis caps them across
 instances by passing `alertCounter`:
@@ -270,15 +275,17 @@ with neither variable set send nothing, so they spend no quota.
   ops alerts; only the error's code is kept. Pass `errorMessage: rawMessage` to
   `createNextObservability`, `initSentry` or `createNodeObservability` to get them back.
 - **Redaction matches key patterns, not 11 exact names.** More keys are redacted (`x-api-key`,
-  `otpCode`, `inviteCode`, any `…Token`), in any case, child-logger bindings included, and `email`,
-  `phone` and `to` values are logged as a hash. A search for a raw address in the logs stops
+  `otpCode`, `inviteCode`, any `…Token`), in any case, error fields, child-logger bindings and ops
+  alert context included, and `email`, `phone` and address-holding `to` values are logged as a hash. A search for a raw address in the logs stops
   matching; search for its hash instead.
 - **Sentry tags hold only numbers, booleans and allow-listed strings.** A string under any other
   key, such as `userId` or `importId`, is in the event's extra data but no longer a tag, so an
   issue search by that tag stops matching. Add the key to `sentryTagKeys` to keep it a tag.
 - **A log flush waits at most about 3 seconds** and sends only what was buffered when it started;
-  records written while it waits go with the next flush.
-- **A shared alert counter gets 1 second** to answer before the alert is counted in the instance.
+  records written while it waits go with the next flush. `shutdown()` flushes up to five times, so
+  a record logged during its last send still ships.
+- **A shared alert counter gets 1 second** to answer before the alert is counted in the instance,
+  logged as `ops_alert_counter_failed` like any other counter failure.
 - **PostHog defaults to the US region**: an EU project must now set `POSTHOG_HOST` (events) and the
   `POSTHOG_API_HOST` repository variable (weekly report).
 

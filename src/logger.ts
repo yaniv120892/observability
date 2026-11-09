@@ -42,13 +42,17 @@ export function createLogger({
     level,
     base: { service },
     serializers: {
+      // `formatters.log` sees the error itself, which it leaves whole, so its fields (a request's
+      // headers on an HTTP client's error) are redacted once serialized.
       err: function serializeWithheldError(value: unknown) {
         return value instanceof Error
-          ? withholdSerializedError({
-              serialized: pino.stdSerializers.err(value),
-              error: value,
-              errorMessage,
-            })
+          ? redact(
+              withholdSerializedError({
+                serialized: pino.stdSerializers.err(value),
+                error: value,
+                errorMessage,
+              }),
+            )
           : value;
       },
     },
@@ -56,43 +60,53 @@ export function createLogger({
     // pino's own `redact` matches exact paths only, so a key spelled another way would slip past.
     formatters: { log: redact },
   };
+  return withRedactedBindings({ logger: buildPino({ options, destinations, pretty }), redact });
+}
+
+function buildPino({
+  options,
+  destinations,
+  pretty,
+}: {
+  options: pino.LoggerOptions;
+  destinations: DestinationStream[];
+  pretty: boolean;
+}): Logger {
   if (pretty) {
-    return withRedactedChildBindings({
-      logger: pino({
-        ...options,
-        transport: { target: 'pino-pretty', options: { colorize: true } },
-      }),
-      redact,
-    });
+    return pino({ ...options, transport: { target: 'pino-pretty', options: { colorize: true } } });
   }
   // A label, not pino's number: it reads the same in a terminal and in Better Stack.
-  options.formatters = { ...options.formatters, level: (label) => ({ level: label }) };
+  const labelledOptions: pino.LoggerOptions = {
+    ...options,
+    formatters: { ...options.formatters, level: (label) => ({ level: label }) },
+  };
   const [onlyDestination, ...otherDestinations] = destinations;
   const hasOneDestination = onlyDestination !== undefined && otherDestinations.length === 0;
   if (hasOneDestination) {
-    return withRedactedChildBindings({ logger: pino(options, onlyDestination), redact });
+    return pino(labelledOptions, onlyDestination);
   }
   // Every stream at the lowest level: the remote stream filters for itself, so a `ship: true`
   // info record can still reach Better Stack.
-  const logger = pino(
-    options,
+  return pino(
+    labelledOptions,
     pino.multistream(destinations.map((stream) => ({ stream, level: 'trace' }))),
   );
-  return withRedactedChildBindings({ logger, redact });
 }
 
 /**
- * pino gives a child's bindings no formatter of the parent's, so they are redacted on the way in.
- * A child inherits the override from its parent, so a grandchild's bindings are redacted too.
+ * pino runs no formatter of the parent's over a child's bindings, nor over `setBindings`, so they
+ * are redacted on the way in. A child inherits both overrides from its parent, so a grandchild's
+ * bindings are redacted too.
  */
-function withRedactedChildBindings({
+function withRedactedBindings({
   logger,
   redact,
 }: {
   logger: Logger;
-  redact: (object: Record<string, unknown>) => Record<string, unknown>;
+  redact: (object: object) => Record<string, unknown>;
 }): Logger {
   const createChild = logger.child;
+  const replaceBindings = logger.setBindings;
   logger.child = function childWithRedactedBindings<ChildCustomLevels extends string = never>(
     this: Logger,
     bindings: pino.Bindings,
@@ -100,6 +114,9 @@ function withRedactedChildBindings({
   ): pino.Logger<ChildCustomLevels> {
     const createRedactedChild = createChild.bind(this);
     return createRedactedChild<ChildCustomLevels>(redact(bindings), options);
+  };
+  logger.setBindings = function setRedactedBindings(this: Logger, bindings: pino.Bindings): void {
+    replaceBindings.call(this, redact(bindings));
   };
   return logger;
 }

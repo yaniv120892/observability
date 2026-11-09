@@ -8,14 +8,19 @@ const REDACTION_DEPTH = 3;
 const PSEUDONYM_PREFIX = 'sha256:';
 const PSEUDONYM_LENGTH = 12;
 
-/** Matched against a key's last word, or its last two words joined: `x-api-key`, `inviteCode`. */
+/** Keys can be dynamic (an id used as a key), so the memo of judged keys stops growing here. */
+const MAX_JUDGED_KEYS = 1000;
+
+/**
+ * Matched against a key's last word, or its last two words joined: `x-api-key`, `inviteCode`.
+ * A word ending in `token`, `secret` or `password` matches through `SECRET_SUFFIXES` instead.
+ */
 const SECRET_NAMES = new Set([
-  'token',
-  'secret',
-  'password',
   'passwd',
   'passphrase',
   'authorization',
+  'authcode',
+  'bearer',
   'cookie',
   'cookies',
   'otp',
@@ -24,30 +29,37 @@ const SECRET_NAMES = new Set([
   'credential',
   'credentials',
   'apikey',
+  'apikeys',
   'accesskey',
   'secretkey',
   'privatekey',
   'signingkey',
   'invitecode',
+  'dsn',
+  'connectionstring',
+  'databaseurl',
 ]);
 /** A lower-case compound such as `accesstoken` or `clientsecret` has no word boundary to split on. */
 const SECRET_SUFFIXES = ['token', 'secret', 'password'];
-/** Words that name the form a secret takes after its name: `otpCode`, `passwordHash`, `tokenValue`. */
-const SECRET_FORMS = new Set(['code', 'hash', 'value', 'header', 'string']);
+/** Words that name the form a secret takes after its name: `otpCode`, `passwordHash`, `keyPem`. */
+const SECRET_FORMS = new Set(['code', 'hash', 'value', 'header', 'string', 'pem']);
 
 const CONTACT_NAMES = new Set(['email', 'phone', 'mobile']);
 const CONTACT_FORMS = new Set(['address', 'number']);
-const CONTACT_KEYS = new Set(['to']);
+/** Also a range's end or a redirect's target, so its value is hashed only when it is an address. */
+const RECIPIENT_KEYS = new Set(['to']);
+const INTERNATIONAL_PHONE = /^\+\d[\d\s().-]{6,}$/;
 
-type RedactionRules = { secretKeys: Set<string> };
+type KeyTreatment = 'redact' | 'pseudonymize' | 'pseudonymize-recipient' | 'walk';
 
-type KeyTreatment = 'redact' | 'pseudonymize' | 'walk';
+type RedactionRules = { secretKeys: Set<string>; judgedKeys: Map<string, KeyTreatment> };
 
 /**
- * A copy of `object` with secrets censored and contact details (an email, a phone, a `to`)
- * replaced by a short stable hash, so one person's records still correlate. A key is judged by
- * its words, whatever its case or separators, so `refreshToken`, `x-api-key` and `OTP_CODE` are
- * secrets while `statusCode` and `tokenCount` are not. `secretKeys` adds exact names, in any case.
+ * A copy of `object` with secrets censored and contact details (an email, a phone, an address in
+ * `to`) replaced by a short stable hash, so one person's records still correlate. A key is judged
+ * by its words, whatever its case or separators, so `refreshToken`, `x-api-key` and `OTP_CODE` are
+ * secrets while `statusCode` and `tokenCount` are not; a boolean under a secret's name, such as
+ * `hasPassword`, is kept. `secretKeys` adds exact names, in any case.
  */
 export function redactSecrets({
   context,
@@ -62,7 +74,7 @@ export function redactSecrets({
 /** The same censoring, built once, for a sink that redacts every record it writes. */
 export function createRedactor(
   secretKeys: string[] = [],
-): (object: Record<string, unknown>) => Record<string, unknown> {
+): (object: object) => Record<string, unknown> {
   const rules = rulesFor(secretKeys);
   return function redact(object) {
     return redactEntries({ object, rules, depth: 0 });
@@ -70,7 +82,7 @@ export function createRedactor(
 }
 
 function rulesFor(secretKeys: string[]): RedactionRules {
-  return { secretKeys: new Set(secretKeys.map((key) => key.toLowerCase())) };
+  return { secretKeys: new Set(secretKeys.map((key) => key.toLowerCase())), judgedKeys: new Map() };
 }
 
 function redactEntries({
@@ -103,9 +115,11 @@ function redactEntry({
 }): unknown {
   switch (treatment) {
     case 'redact':
-      return REDACTED;
+      return typeof value === 'boolean' || value === null || value === undefined ? value : REDACTED;
     case 'pseudonymize':
-      return pseudonymized({ value, rules, depth });
+      return pseudonymized({ value, rules, depth, isAddress: isHashable });
+    case 'pseudonymize-recipient':
+      return pseudonymized({ value, rules, depth, isAddress: isAddressLike });
     default:
       return redactNested({ value, rules, depth: depth + 1 });
   }
@@ -126,8 +140,7 @@ function redactNested({
   if (Array.isArray(value)) {
     return value.map((item: unknown) => redactNested({ value: item, rules, depth: depth + 1 }));
   }
-  // A Date, Error or URL keeps its class, so a sink still serializes it as one.
-  if (isPlainObject(value)) {
+  if (isWalkable(value)) {
     return redactEntries({ object: value, rules, depth });
   }
   return value;
@@ -137,20 +150,30 @@ function pseudonymized({
   value,
   rules,
   depth,
+  isAddress,
 }: {
   value: unknown;
   rules: RedactionRules;
   depth: number;
+  isAddress: (value: unknown) => value is string | number;
 }): unknown {
   if (Array.isArray(value)) {
-    return value.map((item: unknown) => pseudonymized({ value: item, rules, depth }));
+    return value.map((item: unknown) => pseudonymized({ value: item, rules, depth, isAddress }));
   }
-  const isHashable =
-    (typeof value === 'string' && value.trim() !== '') || typeof value === 'number';
-  if (isHashable) {
+  if (isAddress(value)) {
     return pseudonymOf(String(value));
   }
   return redactNested({ value, rules, depth: depth + 1 });
+}
+
+function isHashable(value: unknown): value is string | number {
+  return (typeof value === 'string' && value.trim() !== '') || typeof value === 'number';
+}
+
+function isAddressLike(value: unknown): value is string {
+  return (
+    typeof value === 'string' && (value.includes('@') || INTERNATIONAL_PHONE.test(value.trim()))
+  );
 }
 
 function pseudonymOf(value: string): string {
@@ -159,17 +182,27 @@ function pseudonymOf(value: string): string {
 }
 
 function treatmentOf({ key, rules }: { key: string; rules: RedactionRules }): KeyTreatment {
-  if (rules.secretKeys.has(key.toLowerCase())) {
-    return 'redact';
+  const judged = rules.judgedKeys.get(key);
+  if (judged) {
+    return judged;
   }
+  const treatment = judge({ key, secretKeys: rules.secretKeys });
+  if (rules.judgedKeys.size < MAX_JUDGED_KEYS) {
+    rules.judgedKeys.set(key, treatment);
+  }
+  return treatment;
+}
+
+function judge({ key, secretKeys }: { key: string; secretKeys: Set<string> }): KeyTreatment {
+  const lowerKey = key.toLowerCase();
   const words = wordsOf(key);
-  if (namesSecret(words)) {
+  if (secretKeys.has(lowerKey) || namesSecret(words)) {
     return 'redact';
   }
-  if (CONTACT_KEYS.has(key.toLowerCase()) || namesContact(words)) {
+  if (namesContact(words)) {
     return 'pseudonymize';
   }
-  return 'walk';
+  return RECIPIENT_KEYS.has(lowerKey) ? 'pseudonymize-recipient' : 'walk';
 }
 
 /** `refreshToken`, `x-api-key` and `OTP_CODE` become `refresh token`, `x api key`, `otp code`. */
@@ -182,15 +215,17 @@ function wordsOf(key: string): string[] {
 }
 
 function namesSecret(words: string[]): boolean {
-  return [words, withoutTrailing({ words, forms: SECRET_FORMS })].some((candidate) => {
-    const lastWord = candidate.at(-1) ?? '';
-    const lastTwoWords = candidate.slice(-2).join('');
-    return (
-      SECRET_NAMES.has(lastWord) ||
-      SECRET_NAMES.has(lastTwoWords) ||
-      SECRET_SUFFIXES.some((suffix) => lastWord.endsWith(suffix))
-    );
-  });
+  const withoutForm = withoutTrailing({ words, forms: SECRET_FORMS });
+  return endsInSecretName(words) || (withoutForm !== words && endsInSecretName(withoutForm));
+}
+
+function endsInSecretName(words: string[]): boolean {
+  const lastWord = words.at(-1) ?? '';
+  return (
+    SECRET_NAMES.has(lastWord) ||
+    SECRET_NAMES.has(words.slice(-2).join('')) ||
+    SECRET_SUFFIXES.some((suffix) => lastWord.endsWith(suffix))
+  );
 }
 
 function namesContact(words: string[]): boolean {
@@ -204,10 +239,19 @@ function withoutTrailing({ words, forms }: { words: string[]; forms: Set<string>
   return endsInForm ? words.slice(0, -1) : words;
 }
 
-function isPlainObject(value: unknown): value is object {
+/**
+ * A plain object, or a class instance that serializes as its own fields. An Error, a Map or a
+ * Set, and anything with `toJSON` (a Date, a URL, a Buffer), keeps its class, so a sink still
+ * serializes it as one; a logged error's fields are redacted by the logger's `err` serializer.
+ */
+function isWalkable(value: unknown): value is object {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  const keepsItsClass =
+    value instanceof Error ||
+    value instanceof Map ||
+    value instanceof Set ||
+    ('toJSON' in value && typeof value.toJSON === 'function');
+  return !keepsItsClass;
 }

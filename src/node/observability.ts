@@ -89,6 +89,7 @@ export async function createNodeObservability(
     logger,
     counter: alertCounter,
     errorMessage,
+    secretKeys,
     fetchImplementation,
   });
 
@@ -141,7 +142,7 @@ export async function createNodeObservability(
     async shutdown() {
       clearInterval(timer);
       await Promise.all([
-        remote?.flush(),
+        remote?.drain(),
         analytics.drain(),
         sentry?.flush(SENTRY_FLUSH_TIMEOUT_MS),
       ]);

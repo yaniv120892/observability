@@ -17,6 +17,7 @@ const MAX_BUFFERED_RECORDS = 100;
 const SEND_TIMEOUT_MS = 3000;
 /** Each send aborts at its own timeout; this also bounds a fetch that ignores its signal. */
 const FLUSH_DEADLINE_MS = SEND_TIMEOUT_MS;
+const MAX_DRAIN_ROUNDS = 5;
 const WARN_LEVEL = 40;
 const ERROR_LEVEL = 50;
 const LEADING_LEVEL = /^\{"level":(?:"(\w+)"|(\d+))/;
@@ -84,6 +85,21 @@ export class RemoteLogBuffer {
       this.track(this.send(this.takeBatch()));
     }
     await beforeDeadline({ work: Promise.all(this.pendingSends), deadlineMs: FLUSH_DEADLINE_MS });
+  }
+
+  /**
+   * For shutdown, where no later flush comes: flushes again while records arrive during a send,
+   * such as an error logged by a request still finishing. Capped, so a process that keeps logging
+   * cannot hold the exit open.
+   */
+  public async drain(): Promise<void> {
+    for (let round = 0; round < MAX_DRAIN_ROUNDS && this.hasUnsentWork(); round += 1) {
+      await this.flush();
+    }
+  }
+
+  private hasUnsentWork(): boolean {
+    return this.buffer.length > 0 || this.pendingSends.size > 0;
   }
 
   private track(send: Promise<void>): void {

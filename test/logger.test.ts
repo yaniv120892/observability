@@ -65,10 +65,35 @@ describe('createLogger', () => {
     expect(lines[1]?.to).toBe(lines[0]?.email);
   });
 
-  it("redacts a child logger's bindings", () => {
+  it("redacts a child's, a grandchild's and replaced bindings", () => {
     const { logger, lines } = capture();
-    logger.child({ sessionToken: 'a' }).info('request_started');
-    expect(lines[0]).toMatchObject({ sessionToken: REDACTED });
+    const child = logger.child({ sessionToken: 'a' });
+    child.info('request_started');
+    child.child({ apiKey: 'b' }).info('upstream_called');
+    child.setBindings({ cookie: 'c' });
+    child.info('bindings_replaced');
+    expect(lines).toMatchObject([
+      { sessionToken: REDACTED },
+      { sessionToken: REDACTED, apiKey: REDACTED },
+      { cookie: REDACTED },
+    ]);
+  });
+
+  it("redacts a logged error's own fields, such as the headers of a failed request", () => {
+    const { logger, lines } = capture();
+    const error = Object.assign(new Error('Request failed with status code 401'), {
+      config: { headers: { Authorization: 'Bearer plain', 'x-api-key': 'plain' } },
+      email: 'dana@example.com',
+    });
+    logger.error({ err: error }, 'upstream_failed');
+    logger.error(error);
+    expect(JSON.stringify(lines)).not.toMatch(/plain|dana@example\.com/);
+    expect(lines[0]).toMatchObject({
+      err: {
+        message: 'Request failed with status code 401',
+        config: { headers: { Authorization: REDACTED, 'x-api-key': REDACTED } },
+      },
+    });
   });
 
   it('withholds a Prisma error message by default', () => {

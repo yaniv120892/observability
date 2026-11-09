@@ -48,6 +48,29 @@ const environment = {
 };
 
 describe('createNodeObservability', () => {
+  it('ships on shutdown a record logged while the last send was in flight', async () => {
+    const requests: unknown[] = [];
+    let logDuringSend = (): void => undefined;
+    const observability = await createNodeObservability({
+      service: 'worker',
+      environment,
+      flushIntervalMs: 60_000,
+      fetchImplementation: async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        logDuringSend();
+        logDuringSend = () => undefined;
+        return new Response('');
+      },
+    });
+    logDuringSend = () => observability.logger.info('request_finished_during_shutdown');
+    observability.logger.info('shutting_down');
+    await observability.shutdown();
+    expect(requests).toEqual([
+      [expect.objectContaining({ msg: 'shutting_down' })],
+      [expect.objectContaining({ msg: 'request_finished_during_shutdown' })],
+    ]);
+  });
+
   it('ships info records on shutdown and errors at once', async () => {
     const { requests, fetchImplementation } = createRecordingFetch();
     const observability = await createNodeObservability({
