@@ -1,4 +1,5 @@
 import pino from 'pino';
+import { beforeDeadline } from './deadline.js';
 import type { WriteOutcome } from './remote-log-buffer.types.js';
 
 type LogRecord = Record<string, unknown>;
@@ -14,6 +15,9 @@ type RemoteLogBufferOptions = {
 
 const MAX_BUFFERED_RECORDS = 100;
 const SEND_TIMEOUT_MS = 3000;
+/** Each send aborts at its own timeout; this also bounds a fetch that ignores its signal. */
+const FLUSH_DEADLINE_MS = SEND_TIMEOUT_MS;
+const MAX_DRAIN_ROUNDS = 5;
 const WARN_LEVEL = 40;
 const ERROR_LEVEL = 50;
 const LEADING_LEVEL = /^\{"level":(?:"(\w+)"|(\d+))/;
@@ -71,15 +75,27 @@ export class RemoteLogBuffer {
   }
 
   /**
-   * Sends what is buffered at once, beside any send already under way, and resolves once every
-   * send has landed — including records written while it waited.
+   * Sends what is buffered at once, beside any send already under way, and resolves once those
+   * have landed or `FLUSH_DEADLINE_MS` has passed. Records written while it waits go with the next
+   * flush: waiting for them too never ends while something keeps logging, such as a flood of
+   * failing requests.
    */
   public async flush(): Promise<void> {
-    while (this.buffer.length > 0 || this.pendingSends.size > 0) {
-      if (this.buffer.length > 0) {
-        this.track(this.send(this.takeBatch()));
-      }
-      await Promise.all(this.pendingSends);
+    if (this.buffer.length > 0) {
+      this.track(this.send(this.takeBatch()));
+    }
+    await beforeDeadline({ work: Promise.all(this.pendingSends), deadlineMs: FLUSH_DEADLINE_MS });
+  }
+
+  /**
+   * For shutdown, where no later flush comes: flushes again while records arrive during a send,
+   * such as an error logged by a request still finishing. Capped, so a process that keeps logging
+   * cannot hold the exit open.
+   */
+  public async drain(): Promise<void> {
+    await this.flush();
+    for (let round = 1; round < MAX_DRAIN_ROUNDS && this.buffer.length > 0; round += 1) {
+      await this.flush();
     }
   }
 

@@ -1,6 +1,8 @@
 import type { Logger } from 'pino';
-import { rewrittenMessage } from './error-message.js';
+import { rewrittenMessage, withholdPrismaMessages } from './error-message.js';
+import { beforeDeadline, DEADLINE_PASSED } from './deadline.js';
 import type { ErrorMessage } from './error-message.types.js';
+import { redactSensitive } from './redaction.js';
 import { sendTelegramMessage } from './telegram.js';
 import type { AlertCounter, OpsAlert } from './ops-alerter.types.js';
 
@@ -10,13 +12,17 @@ type OpsAlerterOptions = {
   logger: Logger;
   /** Defaults to a per-process count; pass a shared store's counter to cap across instances. */
   counter?: AlertCounter;
+  /** Defaults to `withholdPrismaMessages`. */
   errorMessage?: ErrorMessage;
+  /** Exact field names to redact from an alert's context, on top of the logger's patterns. */
+  secretKeys?: string[];
   fetchImplementation?: typeof fetch;
 };
 
 export const ALERTS_PER_HOUR = 5;
 const WINDOW_SECONDS = 60 * 60;
 const SUPPRESSION_NOTICE_COUNT = ALERTS_PER_HOUR + 1;
+const COUNTER_TIMEOUT_MS = 1000;
 
 /** Counts per process: a cold start resets it and N instances can each send their own cap. */
 export function createInMemoryAlertCounter(now: () => number = Date.now): AlertCounter {
@@ -47,6 +53,7 @@ export class OpsAlerter {
   private readonly fallbackCounter = createInMemoryAlertCounter();
   private readonly fetchImplementation: typeof fetch;
   private readonly errorMessage: ErrorMessage;
+  private readonly secretKeys: string[];
 
   public constructor(options: OpsAlerterOptions) {
     this.service = options.service;
@@ -54,7 +61,8 @@ export class OpsAlerter {
     this.logger = options.logger;
     this.counter = options.counter ?? this.fallbackCounter;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
-    this.errorMessage = options.errorMessage ?? rawMessage;
+    this.errorMessage = options.errorMessage ?? withholdPrismaMessages;
+    this.secretKeys = options.secretKeys ?? [];
   }
 
   public async alert(alert: OpsAlert): Promise<void> {
@@ -84,14 +92,28 @@ export class OpsAlerter {
     }
   }
 
-  /** A shared store can be the thing that is down, so its outage falls back to this instance's count. */
+  /**
+   * A shared store can be the thing that is down, or hanging, so an outage or a slow answer falls
+   * back to this instance's count rather than holding the alert, and the request it rides on.
+   */
   private async count(key: string): Promise<number> {
+    const countRequest = { key, windowSeconds: WINDOW_SECONDS };
     try {
-      return await this.counter({ key, windowSeconds: WINDOW_SECONDS });
+      const count = await beforeDeadline({
+        work: this.counter(countRequest),
+        deadlineMs: COUNTER_TIMEOUT_MS,
+      });
+      if (count !== DEADLINE_PASSED) {
+        return count;
+      }
+      this.logger.warn(
+        { reason: `no answer within ${COUNTER_TIMEOUT_MS} ms` },
+        'ops_alert_counter_failed',
+      );
     } catch (error) {
       this.logger.warn({ reason: this.describe(error) }, 'ops_alert_counter_failed');
-      return this.fallbackCounter({ key, windowSeconds: WINDOW_SECONDS });
     }
+    return this.fallbackCounter(countRequest);
   }
 
   private messageFor({ alert, count }: { alert: OpsAlert; count: number }): string {
@@ -107,7 +129,11 @@ export class OpsAlerter {
     if (message) {
       lines.push(message);
     }
-    for (const [key, value] of Object.entries(context ?? {})) {
+    const redactedContext = redactSensitive({
+      context: context ?? {},
+      secretKeys: this.secretKeys,
+    });
+    for (const [key, value] of Object.entries(redactedContext)) {
       if (value !== undefined && value !== null) {
         lines.push(`${key}: ${value}`);
       }
@@ -137,8 +163,4 @@ export class OpsAlerter {
       .slice(0, 80);
     return `ops-alert:${normalized}`;
   }
-}
-
-function rawMessage(error: Error): string {
-  return error.message;
 }

@@ -1,5 +1,6 @@
 export { loadObservabilityConfig } from './config.js';
-export { withholdPrismaMessages } from './error-message.js';
+export { rawMessage, withholdPrismaMessages } from './error-message.js';
+export { DEFAULT_SENTRY_TAG_KEYS } from './error-report.js';
 export { checkLiveness, createDeepHealthCheck, HEALTH_RESPONSE_HEADERS } from './health.js';
 export { pingHeartbeat } from './heartbeat.js';
 export { createLogger } from './logger.js';

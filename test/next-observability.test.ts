@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PrismaClientKnownRequestError, WITHHELD_PRISMA_MESSAGE } from './fakes/prisma-error.js';
 import { createRecordingFetch, jsonBodyOf } from './fakes/recording-fetch.js';
 
 const afterTasks: (() => Promise<void>)[] = [];
@@ -37,7 +38,7 @@ async function runAfterTasks(): Promise<void> {
 const betterStackRequests = () =>
   recording.requests.filter((request) => request.url === 'https://in.logs.example/source');
 const posthogRequests = () =>
-  recording.requests.filter((request) => request.url === 'https://eu.i.posthog.com/batch/');
+  recording.requests.filter((request) => request.url === 'https://us.i.posthog.com/batch/');
 const telegramRequests = () =>
   recording.requests.filter((request) => request.url.startsWith('https://api.telegram.org/'));
 
@@ -144,6 +145,23 @@ describe('createNextObservability', () => {
     ]);
   });
 
+  it('tags a string only under an allow-listed key, keeping the rest in extra', () => {
+    serviceIndex += 1;
+    const { reportError } = createNextObservability({
+      service: `next-app-${serviceIndex}`,
+      sentryTagKeys: ['job'],
+    });
+    reportError({
+      error: new Error('x'),
+      where: 'import_failed',
+      context: { userId: 'user-7', importId: 'import-3', job: 'statement_import', method: 'POST' },
+    });
+    expect(capturedExceptions[0]?.hint).toEqual({
+      tags: { job: 'statement_import', method: 'POST', where: 'import_failed' },
+      extra: { userId: 'user-7', importId: 'import-3', job: 'statement_import', method: 'POST' },
+    });
+  });
+
   it('censors secret keys in what reaches Sentry, as the logger does', () => {
     serviceIndex += 1;
     const { reportError } = createNextObservability({
@@ -211,6 +229,29 @@ describe('createNextObservability', () => {
       .find((record) => record.msg === 'unhandled_request_error');
     expect(errorRecord).toMatchObject({ path: '/api/items' });
     expect(betterStackRequests().length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('createNextObservability without an errorMessage', () => {
+  it('withholds a Prisma error message from the log and the alert of a request error', async () => {
+    const { onRequestError } = freshObservability();
+    await onRequestError(
+      new PrismaClientKnownRequestError(),
+      { path: '/api/items', method: 'POST', headers: {} },
+      {
+        routerKind: 'App Router',
+        routePath: '/api/items',
+        routeType: 'route',
+        renderSource: undefined,
+        revalidateReason: undefined,
+      },
+    );
+    expect(JSON.stringify(recording.requests.map(({ init }) => init?.body))).not.toContain(
+      'dana@example.com',
+    );
+    expect(jsonBodyOf(telegramRequests()[0])).toMatchObject({
+      text: expect.stringContaining(WITHHELD_PRISMA_MESSAGE),
+    });
   });
 });
 

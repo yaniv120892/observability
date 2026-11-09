@@ -6,8 +6,9 @@ const PRISMA_ERROR_PREFIX = 'PrismaClient';
 const FIRST_STACK_FRAME = /\n\s+at /;
 
 /**
- * An `errorMessage` for an app on Prisma: a Prisma error's message quotes the query's arguments,
- * and a failed check constraint quotes the whole failing row, so only its code is kept.
+ * The default `errorMessage`: a Prisma error's message quotes the query's arguments, and a failed
+ * check constraint quotes the whole failing row, so only its code is kept. Any other error's
+ * message is kept as it is.
  */
 export function withholdPrismaMessages(error: Error): string {
   if (!error.name.startsWith(PRISMA_ERROR_PREFIX)) {
@@ -15,6 +16,11 @@ export function withholdPrismaMessages(error: Error): string {
   }
   const code = 'code' in error && typeof error.code === 'string' ? error.code : 'no code';
   return `${code}; message withheld, it quotes query arguments`;
+}
+
+/** The `errorMessage` that keeps every message as it is, for an app with no database errors to hide. */
+export function rawMessage(error: Error): string {
+  return error.message;
 }
 
 /**

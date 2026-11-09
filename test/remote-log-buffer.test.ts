@@ -127,6 +127,96 @@ describe('RemoteLogBuffer', () => {
     await Promise.all([timerFlush, urgentFlush]);
   });
 
+  it('resolves a flush while records keep arriving, leaving them for the next one', async () => {
+    const sentBatches: unknown[] = [];
+    const buffer = new RemoteLogBuffer({
+      sourceUrl: 'https://in.logs.example/source',
+      sourceToken: 'source-token',
+      shipLevel: 'warn',
+      service: 'my-app',
+      fetchImplementation: async (_input, init) => {
+        sentBatches.push(JSON.parse(String(init?.body)));
+        buffer.write(line({ level: 'warn', msg: `written during send ${sentBatches.length}` }));
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return new Response('');
+      },
+    });
+    buffer.write(line({ level: 'warn', msg: 'first' }));
+    await buffer.flush();
+    expect(sentBatches).toHaveLength(1);
+    await buffer.flush();
+    expect(sentBatches).toHaveLength(2);
+  });
+
+  it('drains records written during the last send, for a shutdown', async () => {
+    const sentBatches: unknown[] = [];
+    const buffer = new RemoteLogBuffer({
+      sourceUrl: 'https://in.logs.example/source',
+      sourceToken: 'source-token',
+      shipLevel: 'warn',
+      service: 'my-app',
+      fetchImplementation: async (_input, init) => {
+        sentBatches.push(JSON.parse(String(init?.body)));
+        if (sentBatches.length === 1) {
+          buffer.write(line({ level: 'error', msg: 'request_failed_during_shutdown' }));
+        }
+        return new Response('');
+      },
+    });
+    buffer.write(line({ level: 'warn', msg: 'first' }));
+    await buffer.drain();
+    expect(sentBatches).toEqual([
+      [expect.objectContaining({ msg: 'first' })],
+      [expect.objectContaining({ msg: 'request_failed_during_shutdown' })],
+    ]);
+  });
+
+  it('waits for a hung send once, not once per drain round', async () => {
+    vi.useFakeTimers();
+    const buffer = new RemoteLogBuffer({
+      sourceUrl: 'https://in.logs.example/source',
+      sourceToken: 'source-token',
+      shipLevel: 'warn',
+      service: 'my-app',
+      fetchImplementation: () => new Promise<Response>(() => undefined),
+    });
+    buffer.write(line({ level: 'warn', msg: 'stuck' }));
+    let isDrained = false;
+    async function drainAndNote(): Promise<void> {
+      await buffer.drain();
+      isDrained = true;
+    }
+    const draining = drainAndNote();
+    await vi.advanceTimersByTimeAsync(3000);
+    await draining;
+    expect(isDrained).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('gives up waiting on a send that never settles after three seconds', async () => {
+    vi.useFakeTimers();
+    const buffer = new RemoteLogBuffer({
+      sourceUrl: 'https://in.logs.example/source',
+      sourceToken: 'source-token',
+      shipLevel: 'warn',
+      service: 'my-app',
+      fetchImplementation: () => new Promise<Response>(() => undefined),
+    });
+    buffer.write(line({ level: 'warn', msg: 'stuck' }));
+    let isFlushed = false;
+    async function flushAndNote(): Promise<void> {
+      await buffer.flush();
+      isFlushed = true;
+    }
+    const flushing = flushAndNote();
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(isFlushed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
+    expect(isFlushed).toBe(true);
+    vi.useRealTimers();
+  });
+
   it('reports a rejected batch once on stderr, not into the buffer', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     const recording = createRecordingFetch(401);

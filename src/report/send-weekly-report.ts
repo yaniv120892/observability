@@ -3,7 +3,7 @@ import { pingHeartbeat } from '../heartbeat.js';
 import { deliverWeeklyReport } from './deliver-weekly-report.js';
 import { collectWeeklyStats } from './weekly-report.js';
 
-const DEFAULT_POSTHOG_API_HOST = 'https://eu.posthog.com';
+const DEFAULT_POSTHOG_API_HOST = 'https://us.posthog.com';
 
 function required(name: string): string {
   const value = process.env[name]?.trim();

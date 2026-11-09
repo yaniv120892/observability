@@ -1,5 +1,6 @@
 export { createNodeObservability } from './observability.js';
-export { withholdPrismaMessages } from '../error-message.js';
+export { rawMessage, withholdPrismaMessages } from '../error-message.js';
+export { DEFAULT_SENTRY_TAG_KEYS } from '../error-report.js';
 export type {
   ActiveIntegrations,
   LongRunningNodeObservabilityOptions,

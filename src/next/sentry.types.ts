@@ -6,6 +6,9 @@ export type NextBeforeBreadcrumb = NonNullable<Sentry.BrowserOptions['beforeBrea
 export type NextSentryOptions = {
   /** Runs after the package has cut request URLs to their origin; see `initSentry`. */
   beforeBreadcrumb?: NextBeforeBreadcrumb;
-  /** Rewrites the message of every error event the SDK sends, its own captures included. */
+  /**
+   * Rewrites the message of every error event the SDK sends, its own captures included. Defaults
+   * to `withholdPrismaMessages`; pass `rawMessage` to keep every message.
+   */
   errorMessage?: ErrorMessage;
 };

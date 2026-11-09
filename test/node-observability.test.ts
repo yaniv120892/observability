@@ -48,6 +48,29 @@ const environment = {
 };
 
 describe('createNodeObservability', () => {
+  it('ships on shutdown a record logged while the last send was in flight', async () => {
+    const requests: unknown[] = [];
+    let logDuringSend = (): void => undefined;
+    const observability = await createNodeObservability({
+      service: 'worker',
+      environment,
+      flushIntervalMs: 60_000,
+      fetchImplementation: async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        logDuringSend();
+        logDuringSend = () => undefined;
+        return new Response('');
+      },
+    });
+    logDuringSend = () => observability.logger.info('request_finished_during_shutdown');
+    observability.logger.info('shutting_down');
+    await observability.shutdown();
+    expect(requests).toEqual([
+      [expect.objectContaining({ msg: 'shutting_down' })],
+      [expect.objectContaining({ msg: 'request_finished_during_shutdown' })],
+    ]);
+  });
+
   it('ships info records on shutdown and errors at once', async () => {
     const { requests, fetchImplementation } = createRecordingFetch();
     const observability = await createNodeObservability({
@@ -89,18 +112,26 @@ describe('createNodeObservability', () => {
     await observability.shutdown();
   });
 
-  it('sends the report context to Sentry as extra, and its primitives as tags', async () => {
+  it('sends the report context to Sentry as extra, and only allow-listed strings as tags', async () => {
     const { fetchImplementation } = createRecordingFetch();
     const observability = await createNodeObservability({
       service: 'worker',
       environment: { SENTRY_DSN: 'https://key@sentry.example/1' },
       fetchImplementation,
+      sentryTagKeys: ['job'],
     });
     const error = new Error('login failed');
     observability.reportError({
       error,
       where: 'sync_failed',
-      context: { memberId: 'member-7', attempt: 2, session: { cookie: 'sid=x' }, token: 'x' },
+      context: {
+        memberId: 'member-7',
+        job: 'sync',
+        method: 'POST',
+        attempt: 2,
+        session: { cookie: 'sid=x' },
+        token: 'x',
+      },
     });
     await observability.shutdown();
     expect(observability.integrations.sentry).toBe(true);
@@ -108,9 +139,11 @@ describe('createNodeObservability', () => {
       {
         error,
         hint: {
-          tags: { memberId: 'member-7', attempt: 2, where: 'sync_failed' },
+          tags: { job: 'sync', method: 'POST', attempt: 2, where: 'sync_failed' },
           extra: {
             memberId: 'member-7',
+            job: 'sync',
+            method: 'POST',
             attempt: 2,
             session: { cookie: '[redacted]' },
             token: '[redacted]',
@@ -177,7 +210,7 @@ describe('createNodeObservability', () => {
     await observability.shutdown();
 
     expect(observability.integrations.productAnalytics).toBe(true);
-    expect(requests.map((request) => request.url)).toEqual(['https://eu.i.posthog.com/batch/']);
+    expect(requests.map((request) => request.url)).toEqual(['https://us.i.posthog.com/batch/']);
     expect(jsonBodyOf(requests[0])).toEqual({
       api_key: 'phc_test',
       batch: [
@@ -231,7 +264,7 @@ describe('createNodeObservability', () => {
       observability.captureEvent({ event: 'class_booked', userId: 'owner' });
       await vi.advanceTimersByTimeAsync(1000);
 
-      expect(requests.map((request) => request.url)).toEqual(['https://eu.i.posthog.com/batch/']);
+      expect(requests.map((request) => request.url)).toEqual(['https://us.i.posthog.com/batch/']);
       await observability.shutdown();
     } finally {
       vi.useRealTimers();
@@ -303,7 +336,7 @@ describe('createNodeObservability in serverless mode', () => {
     observability.captureEvent({ event: 'expense_created', userId: '42' });
     expect(vi.getTimerCount()).toBe(0);
     await observability.flushRemoteLogs();
-    expect(requests.map((request) => request.url)).toEqual(['https://eu.i.posthog.com/batch/']);
+    expect(requests.map((request) => request.url)).toEqual(['https://us.i.posthog.com/batch/']);
   });
 
   it('can be flushed again and again, sending only what arrived since', async () => {

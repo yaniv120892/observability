@@ -25,13 +25,16 @@ export type NextObservability = {
 
 export type NextObservabilityOptions = {
   service: string;
+  /** Exact field names, in any case, to redact on top of the default secret-name patterns. */
   secretKeys?: string[];
+  /** Context keys whose string values become Sentry tags, on top of the defaults. */
+  sentryTagKeys?: string[];
   /** Defaults to a per-instance count; pass a shared store's counter to cap across instances. */
   alertCounter?: AlertCounter;
   /**
    * Rewrites error messages in logs, ops alerts and every server-side Sentry event sent once this
-   * object exists. Pass the same function to `initSentry` to cover events before then and in the
-   * browser.
+   * object exists. Defaults to `withholdPrismaMessages`; pass `rawMessage` to keep every message.
+   * Pass the same function to `initSentry` to cover events before then and in the browser.
    */
   errorMessage?: ErrorMessage;
 };
