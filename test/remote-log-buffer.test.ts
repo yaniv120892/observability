@@ -137,6 +137,7 @@ describe('RemoteLogBuffer', () => {
       fetchImplementation: async (_input, init) => {
         sentBatches.push(JSON.parse(String(init?.body)));
         buffer.write(line({ level: 'warn', msg: `written during send ${sentBatches.length}` }));
+        await new Promise((resolve) => setTimeout(resolve, 1));
         return new Response('');
       },
     });
