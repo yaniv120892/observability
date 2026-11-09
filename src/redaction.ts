@@ -8,7 +8,7 @@ const REDACTION_DEPTH = 3;
 const PSEUDONYM_PREFIX = 'sha256:';
 const PSEUDONYM_LENGTH = 12;
 
-/** Keys can be dynamic (an id used as a key), so the memo of judged keys stops growing here. */
+/** Keys can be dynamic (an id used as a key), so the memo of judged keys starts over past this. */
 const MAX_JUDGED_KEYS = 1000;
 
 /** Matched against a key's last word, or its last two words joined: `x-api-key`, `inviteCode`. */
@@ -38,18 +38,24 @@ const SECRET_NAMES = new Set([
 ]);
 /** A lower-case compound such as `accesstoken` or `clientsecret` has no word boundary to split on. */
 const SECRET_SUFFIXES = ['token', 'secret', 'password'];
-/** Words that name the form a secret takes after its name: `otpCode`, `passwordHash`, `keyPem`. */
+/** Words that name the form a secret takes after its name: `otpCode`, `passwordHash`, `privateKeyPem`. */
 const SECRET_FORMS = new Set(['code', 'hash', 'value', 'header', 'string', 'pem']);
 
 const CONTACT_NAMES = new Set(['email', 'phone', 'mobile']);
 const CONTACT_FORMS = new Set(['address', 'number']);
 /** Also a range's end or a redirect's target, so its value is hashed only when it is an address. */
 const RECIPIENT_KEYS = new Set(['to']);
-const INTERNATIONAL_PHONE = /^\+\d[\d\s().-]{6,}$/;
+const PHONE_SEPARATORS = /[\s().-]/g;
+const PHONE_DIGITS = /^\+?\d{9,15}$/;
 
 type KeyTreatment = 'redact' | 'pseudonymize' | 'pseudonymize-recipient' | 'walk';
 
-type RedactionRules = { secretKeys: Set<string>; judgedKeys: Map<string, KeyTreatment> };
+type RedactionRules = {
+  secretKeys: Set<string>;
+  judgedKeys: Map<string, KeyTreatment>;
+  /** The top-level key a sink serializes errors under, and redacts itself; null walks no error. */
+  serializedErrorKey: string | null;
+};
 
 /**
  * A copy of `object` with secrets censored and contact details (an email, a phone, an address in
@@ -65,21 +71,39 @@ export function redactSensitive({
   context: Record<string, unknown>;
   secretKeys?: string[];
 }): Record<string, unknown> {
-  return redactEntries({ object: context, rules: rulesFor(secretKeys), depth: 0 });
+  const rules = rulesFor({ secretKeys, serializedErrorKey: null });
+  return redactEntries({ object: context, rules, depth: 0 });
 }
 
-/** The same censoring, built once, for a sink that redacts every record it writes. */
-export function createRedactor(
-  secretKeys: string[] = [],
-): (object: object) => Record<string, unknown> {
-  const rules = rulesFor(secretKeys);
+/**
+ * The same censoring, built once, for a log sink that writes every record as JSON. An error
+ * anywhere but under `serializedErrorKey` is written as its own fields, so those are walked too.
+ */
+export function createRedactor({
+  secretKeys = [],
+  serializedErrorKey,
+}: {
+  secretKeys?: string[];
+  serializedErrorKey: string;
+}): (object: object) => Record<string, unknown> {
+  const rules = rulesFor({ secretKeys, serializedErrorKey });
   return function redact(object) {
     return redactEntries({ object, rules, depth: 0 });
   };
 }
 
-function rulesFor(secretKeys: string[]): RedactionRules {
-  return { secretKeys: new Set(secretKeys.map((key) => key.toLowerCase())), judgedKeys: new Map() };
+function rulesFor({
+  secretKeys,
+  serializedErrorKey,
+}: {
+  secretKeys: string[];
+  serializedErrorKey: string | null;
+}): RedactionRules {
+  return {
+    secretKeys: new Set(secretKeys.map((key) => key.toLowerCase())),
+    judgedKeys: new Map(),
+    serializedErrorKey,
+  };
 }
 
 function redactEntries({
@@ -94,7 +118,9 @@ function redactEntries({
   return Object.fromEntries(
     Object.entries(object).map(([key, value]) => [
       key,
-      redactEntry({ treatment: treatmentOf({ key, rules }), value, rules, depth }),
+      isSerializedError({ key, rules, depth })
+        ? value
+        : redactEntry({ treatment: treatmentOf({ key, rules }), value, rules, depth }),
     ]),
   );
 }
@@ -139,7 +165,9 @@ function redactNested({
   if (Array.isArray(value)) {
     return value.map((item: unknown) => redactNested({ value: item, rules, depth: depth + 1 }));
   }
-  if (isWalkable(value)) {
+  const isWalkable =
+    isObject(value) && !keepsItsClass({ value, walksErrors: rules.serializedErrorKey !== null });
+  if (isWalkable) {
     return redactEntries({ object: value, rules, depth });
   }
   return value;
@@ -171,7 +199,8 @@ function isHashable(value: unknown): value is string | number {
 
 function isAddressLike(value: unknown): value is string {
   return (
-    typeof value === 'string' && (value.includes('@') || INTERNATIONAL_PHONE.test(value.trim()))
+    typeof value === 'string' &&
+    (value.includes('@') || PHONE_DIGITS.test(value.replace(PHONE_SEPARATORS, '')))
   );
 }
 
@@ -186,9 +215,10 @@ function treatmentOf({ key, rules }: { key: string; rules: RedactionRules }): Ke
     return judged;
   }
   const treatment = judge({ key, secretKeys: rules.secretKeys });
-  if (rules.judgedKeys.size < MAX_JUDGED_KEYS) {
-    rules.judgedKeys.set(key, treatment);
+  if (rules.judgedKeys.size >= MAX_JUDGED_KEYS) {
+    rules.judgedKeys.clear();
   }
+  rules.judgedKeys.set(key, treatment);
   return treatment;
 }
 
@@ -238,19 +268,33 @@ function withoutTrailing({ words, forms }: { words: string[]; forms: Set<string>
   return endsInForm ? words.slice(0, -1) : words;
 }
 
+function isSerializedError({
+  key,
+  rules,
+  depth,
+}: {
+  key: string;
+  rules: RedactionRules;
+  depth: number;
+}): boolean {
+  return depth === 0 && key === rules.serializedErrorKey;
+}
+
+function isObject(value: unknown): value is object {
+  return typeof value === 'object' && value !== null;
+}
+
 /**
- * A plain object, or a class instance that serializes as its own fields. An Error, a Map or a
- * Set, and anything with `toJSON` (a Date, a URL, a Buffer), keeps its class, so a sink still
- * serializes it as one; a logged error's fields are redacted by the logger's `err` serializer.
+ * Walked otherwise, as its own fields. A Map, a Set, a typed array, anything with `toJSON` (a
+ * Date, a URL, a Buffer) and, unless the sink writes JSON, an Error keep their class, so the sink
+ * still serializes them as one.
  */
-function isWalkable(value: unknown): value is object {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const keepsItsClass =
-    value instanceof Error ||
+function keepsItsClass({ value, walksErrors }: { value: object; walksErrors: boolean }): boolean {
+  return (
+    (value instanceof Error && !walksErrors) ||
+    ArrayBuffer.isView(value) ||
     value instanceof Map ||
     value instanceof Set ||
-    ('toJSON' in value && typeof value.toJSON === 'function');
-  return !keepsItsClass;
+    ('toJSON' in value && typeof value.toJSON === 'function')
+  );
 }

@@ -80,6 +80,7 @@ describe('redactSensitive', () => {
       context: {
         email: { to: 'dana@example.com' },
         sms: { to: '+972 50-123-4567' },
+        localSms: { to: '054-123-4567' },
         range: { from: '2026-10-01', to: '2026-10-31' },
         redirect: { to: '/login' },
       },
@@ -87,6 +88,7 @@ describe('redactSensitive', () => {
     expect(redacted).toEqual({
       email: { to: expect.stringMatching(PSEUDONYM) },
       sms: { to: expect.stringMatching(PSEUDONYM) },
+      localSms: { to: expect.stringMatching(PSEUDONYM) },
       range: { from: '2026-10-01', to: '2026-10-31' },
       redirect: { to: '/login' },
     });
@@ -100,6 +102,14 @@ describe('redactSensitive', () => {
     expect(redactSensitive({ context: { login: new Credentials() } })).toEqual({
       login: { user: 'dana', password: REDACTED },
     });
+  });
+
+  it('keeps a typed array and an error whole, for a sink that serializes them itself', () => {
+    const payload = new Uint8Array(4);
+    const cause = Object.assign(new Error('x'), { token: 'plain' });
+    const redacted = redactSensitive({ context: { payload, nested: { cause } } });
+    expect(redacted.payload).toBe(payload);
+    expect(redacted.nested).toEqual({ cause });
   });
 
   it('walks into objects and arrays up to three levels deep', () => {

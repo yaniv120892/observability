@@ -79,6 +79,16 @@ describe('createLogger', () => {
     ]);
   });
 
+  it('redacts the fields of an error logged under any other key', () => {
+    const { logger, lines } = capture();
+    const error = Object.assign(new Error('Request failed'), {
+      headers: { Authorization: 'Bearer plain' },
+    });
+    logger.warn({ error }, 'upstream_retrying');
+    expect(JSON.stringify(lines)).not.toContain('plain');
+    expect(lines[0]).toMatchObject({ error: { headers: { Authorization: REDACTED } } });
+  });
+
   it("redacts a logged error's own fields, such as the headers of a failed request", () => {
     const { logger, lines } = capture();
     const error = Object.assign(new Error('Request failed with status code 401'), {

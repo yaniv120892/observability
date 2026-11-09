@@ -7,6 +7,8 @@ import {
 import type { ErrorMessage } from './error-message.types.js';
 import { createRedactor } from './redaction.js';
 
+const SERIALIZED_ERROR_KEY = 'err';
+
 type LogMethodHook = NonNullable<NonNullable<pino.LoggerOptions['hooks']>['logMethod']>;
 
 type CreateLoggerOptions = {
@@ -37,14 +39,14 @@ export function createLogger({
   pretty = false,
   errorMessage = withholdPrismaMessages,
 }: CreateLoggerOptions): Logger {
-  const redact = createRedactor(secretKeys);
+  const redact = createRedactor({ secretKeys, serializedErrorKey: SERIALIZED_ERROR_KEY });
   const options: pino.LoggerOptions = {
     level,
     base: { service },
     serializers: {
-      // `formatters.log` sees the error itself, which it leaves whole, so its fields (a request's
+      // `formatters.log` leaves this error whole for the serializer, so its fields (a request's
       // headers on an HTTP client's error) are redacted once serialized.
-      err: function serializeWithheldError(value: unknown) {
+      [SERIALIZED_ERROR_KEY]: function serializeWithheldError(value: unknown) {
         return value instanceof Error
           ? redact(
               withholdSerializedError({

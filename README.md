@@ -106,14 +106,13 @@ tag, as every number is.
 
 ## Redaction
 
-Every log line (a logged error's own fields and child-logger bindings included), every `context`
+Every log line (the fields of a logged error and child-logger bindings included), every `context`
 sent to Sentry and every ops alert's context is walked three levels deep. A key is judged by its
 words, whatever its case or separators: one that names a token, secret, password, authorization,
 cookie, API key, private key, OTP, invite code, credential or connection string (`refreshToken`,
 `x-api-key`, `OTP_CODE`, `passwordHash`, `DATABASE_URL`) is replaced by `[redacted]`, unless it holds
 a boolean, while `statusCode`, `tokenCount` and `secretName` are kept. An `email` or a `phone`
-(`userEmail`, `phoneNumber`), and a `to` that holds an email address or an international phone
-number, become `sha256:` and 12 hex characters of the lower-cased value's hash, so one person's
+(`userEmail`, `phoneNumber`), and a `to` that holds an email address or a phone number, become `sha256:` and 12 hex characters of the lower-cased value's hash, so one person's
 lines still correlate. The hash is not keyed: anyone with a candidate address can confirm it, so it
 keeps addresses out of plain sight, not out of reach. `secretKeys` adds exact names, matched in any
 case. Redaction by name is a safety net, not a licence: log ids, not personal data.

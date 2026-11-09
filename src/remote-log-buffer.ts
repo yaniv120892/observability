@@ -93,13 +93,10 @@ export class RemoteLogBuffer {
    * cannot hold the exit open.
    */
   public async drain(): Promise<void> {
-    for (let round = 0; round < MAX_DRAIN_ROUNDS && this.hasUnsentWork(); round += 1) {
+    await this.flush();
+    for (let round = 1; round < MAX_DRAIN_ROUNDS && this.buffer.length > 0; round += 1) {
       await this.flush();
     }
-  }
-
-  private hasUnsentWork(): boolean {
-    return this.buffer.length > 0 || this.pendingSends.size > 0;
   }
 
   private track(send: Promise<void>): void {

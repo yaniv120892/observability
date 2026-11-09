@@ -171,6 +171,28 @@ describe('RemoteLogBuffer', () => {
     ]);
   });
 
+  it('waits for a hung send once, not once per drain round', async () => {
+    vi.useFakeTimers();
+    const buffer = new RemoteLogBuffer({
+      sourceUrl: 'https://in.logs.example/source',
+      sourceToken: 'source-token',
+      shipLevel: 'warn',
+      service: 'my-app',
+      fetchImplementation: () => new Promise<Response>(() => undefined),
+    });
+    buffer.write(line({ level: 'warn', msg: 'stuck' }));
+    let isDrained = false;
+    async function drainAndNote(): Promise<void> {
+      await buffer.drain();
+      isDrained = true;
+    }
+    const draining = drainAndNote();
+    await vi.advanceTimersByTimeAsync(3000);
+    await draining;
+    expect(isDrained).toBe(true);
+    vi.useRealTimers();
+  });
+
   it('gives up waiting on a send that never settles after three seconds', async () => {
     vi.useFakeTimers();
     const buffer = new RemoteLogBuffer({
