@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProductAnalytics } from '../src/product-analytics.js';
 import { createRecordingFetch, jsonBodyOf } from './fakes/recording-fetch.js';
 
-const CONFIG = { projectKey: 'phc_test', host: 'https://eu.i.posthog.com' };
+const CONFIG = { projectKey: 'phc_test', host: 'https://us.i.posthog.com' };
 
 function createAnalytics({
   fetchImplementation,

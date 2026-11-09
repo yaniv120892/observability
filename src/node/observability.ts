@@ -1,7 +1,7 @@
 import type * as SentryNode from '@sentry/node';
 import type { Level, Logger } from 'pino';
 import { loadObservabilityConfig } from '../config.js';
-import { withholdingEventProcessor } from '../error-message.js';
+import { withholdingEventProcessor, withholdPrismaMessages } from '../error-message.js';
 import type { ErrorMessage } from '../error-message.types.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { checkLiveness, createDeepHealthCheck } from '../health.js';
@@ -35,7 +35,8 @@ export async function createNodeObservability(
     environment = process.env,
     secretKeys,
     alertCounter,
-    errorMessage,
+    errorMessage = withholdPrismaMessages,
+    sentryTagKeys,
     fetchImplementation = fetch,
   } = options;
   const isServerless = options.mode === 'serverless';
@@ -104,7 +105,15 @@ export async function createNodeObservability(
       logger.error({ err: error, ...context }, where);
       if (sentry) {
         captureQuietly(() =>
-          sentry.captureException(error, toSentryCaptureContext({ where, context, secretKeys })),
+          sentry.captureException(
+            error,
+            toSentryCaptureContext({
+              where,
+              context,
+              secretKeys,
+              tagKeys: sentryTagKeys,
+            }),
+          ),
         );
         if (isServerless) {
           keepAlive(sentry.flush(SENTRY_FLUSH_TIMEOUT_MS));
@@ -204,7 +213,7 @@ async function startSentry({
 }: {
   dsn: string | null;
   environment: string;
-  errorMessage: ErrorMessage | undefined;
+  errorMessage: ErrorMessage;
   logger: Logger;
 }): Promise<SentryModule | null> {
   if (!dsn) {
@@ -225,7 +234,7 @@ async function startSentry({
       },
       // No integration here records requests yet; this keeps one added later from leaking URLs.
       beforeBreadcrumb: scrubRequestUrls,
-      ...(errorMessage && { beforeSend: withholdingEventProcessor(errorMessage) }),
+      beforeSend: withholdingEventProcessor(errorMessage),
       integrations: [
         sentry.eventFiltersIntegration(),
         sentry.functionToStringIntegration(),

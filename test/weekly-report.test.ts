@@ -7,7 +7,7 @@ import { jsonBodyOf } from './fakes/recording-fetch.js';
 const NOW = new Date('2026-11-01T07:00:00Z');
 const QUERY_OPTIONS = {
   query: 'SELECT 1',
-  apiHost: 'https://eu.posthog.com',
+  apiHost: 'https://us.posthog.com',
   projectId: '123',
   personalApiKey: 'phx_secret',
   retryDelayMs: 0,
@@ -106,7 +106,7 @@ describe('weekly report', () => {
 
     const rows = await runHogQLQuery({
       query: 'SELECT 1',
-      apiHost: 'https://eu.posthog.com',
+      apiHost: 'https://us.posthog.com',
       projectId: '123',
       personalApiKey: 'phx_secret',
       fetchImplementation,
@@ -114,7 +114,7 @@ describe('weekly report', () => {
 
     expect(rows).toEqual([['expenses', 3]]);
     const [url, init] = fetchImplementation.mock.calls[0] ?? [];
-    expect(url).toBe('https://eu.posthog.com/api/projects/123/query/');
+    expect(url).toBe('https://us.posthog.com/api/projects/123/query/');
     expect(init?.headers).toMatchObject({ Authorization: 'Bearer phx_secret' });
     expect(jsonBodyOf({ url: String(url), init })).toEqual({
       query: { kind: 'HogQLQuery', query: 'SELECT 1' },
@@ -131,7 +131,7 @@ describe('weekly report', () => {
     );
 
     await collectWeeklyStats({
-      apiHost: 'https://eu.posthog.com',
+      apiHost: 'https://us.posthog.com',
       projectId: '123',
       personalApiKey: 'phx_secret',
       fetchImplementation,
@@ -153,7 +153,7 @@ describe('weekly report', () => {
     await expect(
       runHogQLQuery({
         query: 'SELECT 1',
-        apiHost: 'https://eu.posthog.com',
+        apiHost: 'https://us.posthog.com',
         projectId: '123',
         personalApiKey: 'phx_secret',
         fetchImplementation,

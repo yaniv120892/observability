@@ -1,7 +1,7 @@
 import * as Sentry from '@sentry/nextjs';
 import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
-import { withholdingEventProcessor } from '../error-message.js';
+import { withholdingEventProcessor, withholdPrismaMessages } from '../error-message.js';
 import { captureQuietly, toSentryCaptureContext } from '../error-report.js';
 import { pingHeartbeat } from '../heartbeat.js';
 import { createLogger } from '../logger.js';
@@ -37,7 +37,8 @@ function build({
   service,
   secretKeys,
   alertCounter,
-  errorMessage,
+  errorMessage = withholdPrismaMessages,
+  sentryTagKeys,
 }: NextObservabilityOptions): NextObservability {
   const config = loadObservabilityConfig();
   const isDevelopment = process.env.NODE_ENV === 'development';
@@ -64,13 +65,11 @@ function build({
     counter: alertCounter,
     errorMessage,
   });
-  if (errorMessage) {
-    // On the global scope, so every event the server SDK sends is covered, its own captures
-    // included, whether or not `initSentry` was given the same function.
-    captureQuietly(() =>
-      Sentry.getGlobalScope().addEventProcessor(withholdingEventProcessor(errorMessage)),
-    );
-  }
+  // On the global scope, so every event the server SDK sends is covered, its own captures
+  // included, whether or not `initSentry` was given the same function.
+  captureQuietly(() =>
+    Sentry.getGlobalScope().addEventProcessor(withholdingEventProcessor(errorMessage)),
+  );
   const analytics = new ProductAnalytics({
     service,
     environment: config.environment,
@@ -89,7 +88,15 @@ function build({
       // Synchronous, so the SDK holds the event before this returns: an import still pending when
       // a serverless function freezes after its response loses the event with it.
       captureQuietly(() =>
-        Sentry.captureException(error, toSentryCaptureContext({ where, context, secretKeys })),
+        Sentry.captureException(
+          error,
+          toSentryCaptureContext({
+            where,
+            context,
+            secretKeys,
+            tagKeys: sentryTagKeys,
+          }),
+        ),
       );
     },
     async notifyOpsAlert(alert) {

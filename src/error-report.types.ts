@@ -13,5 +13,11 @@ export type ErrorReportCaptureContext = {
   extra: Record<string, unknown>;
 };
 
-/** An error report's Sentry-bound fields, plus the field names to censor on top of the defaults. */
-export type SentryCaptureInput = Omit<ErrorReport, 'error'> & { secretKeys?: string[] };
+/**
+ * An error report's Sentry-bound fields, plus the field names to censor on top of the defaults and
+ * the context keys whose string values may become tags on top of `DEFAULT_SENTRY_TAG_KEYS`.
+ */
+export type SentryCaptureInput = Omit<ErrorReport, 'error'> & {
+  secretKeys?: string[];
+  tagKeys?: string[];
+};

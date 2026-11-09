@@ -2,7 +2,7 @@ import type { LogLevel, ObservabilityConfig } from './config.types.js';
 
 const DEVELOPMENT_ENVIRONMENT = 'development';
 export const PRODUCTION_ENVIRONMENT = 'production';
-const DEFAULT_POSTHOG_HOST = 'https://eu.i.posthog.com';
+const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 const LOG_LEVELS: LogLevel[] = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 
 function optional(value: string | undefined): string | null {

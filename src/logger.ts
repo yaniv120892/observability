@@ -1,26 +1,11 @@
 import pino, { type DestinationStream, type Logger } from 'pino';
-import { rewrittenMessage, withholdSerializedError } from './error-message.js';
+import {
+  rewrittenMessage,
+  withholdPrismaMessages,
+  withholdSerializedError,
+} from './error-message.js';
 import type { ErrorMessage } from './error-message.types.js';
-
-// Redaction matches keys exactly, so header names appear in both of the cases they arrive in.
-const DEFAULT_SECRET_KEYS = [
-  'password',
-  'token',
-  'accessToken',
-  'refreshToken',
-  'botToken',
-  'sourceToken',
-  'secret',
-  'authorization',
-  'Authorization',
-  'cookie',
-  'Cookie',
-];
-
-export const REDACTED = '[redacted]';
-
-/** Matches the `key`, `*.key` and `*.*.key` paths the logger redacts. */
-const REDACTION_DEPTH = 3;
+import { createRedactor } from './redaction.js';
 
 type LogMethodHook = NonNullable<NonNullable<pino.LoggerOptions['hooks']>['logMethod']>;
 
@@ -28,11 +13,14 @@ type CreateLoggerOptions = {
   service: string;
   level: string;
   destinations: DestinationStream[];
-  /** Field names to redact on top of the defaults, at any of the first three depths. */
+  /** Exact field names, in any case, to redact on top of the default patterns; see `redactSecrets`. */
   secretKeys?: string[];
   /** Human-readable output through pino-pretty, for a local dev server. */
   pretty?: boolean;
-  /** Rewrites the message of every logged error, in `err` and in the `msg` it lends; see `ErrorMessage`. */
+  /**
+   * Rewrites the message of every logged error, in `err` and in the `msg` it lends; see
+   * `ErrorMessage`. Defaults to `withholdPrismaMessages`.
+   */
   errorMessage?: ErrorMessage;
 };
 
@@ -47,18 +35,13 @@ export function createLogger({
   destinations,
   secretKeys = [],
   pretty = false,
-  errorMessage,
+  errorMessage = withholdPrismaMessages,
 }: CreateLoggerOptions): Logger {
+  const redact = createRedactor(secretKeys);
   const options: pino.LoggerOptions = {
     level,
     base: { service },
-    redact: {
-      paths: allSecretKeys(secretKeys).flatMap((key) => [key, `*.${key}`, `*.*.${key}`]),
-      censor: REDACTED,
-    },
-  };
-  if (errorMessage) {
-    options.serializers = {
+    serializers: {
       err: function serializeWithheldError(value: unknown) {
         return value instanceof Error
           ? withholdSerializedError({
@@ -68,25 +51,57 @@ export function createLogger({
             })
           : value;
       },
-    };
-    options.hooks = { logMethod: withholdDefaultMessage(errorMessage) };
-  }
+    },
+    hooks: { logMethod: withholdDefaultMessage(errorMessage) },
+    // pino's own `redact` matches exact paths only, so a key spelled another way would slip past.
+    formatters: { log: redact },
+  };
   if (pretty) {
-    return pino({ ...options, transport: { target: 'pino-pretty', options: { colorize: true } } });
+    return withRedactedChildBindings({
+      logger: pino({
+        ...options,
+        transport: { target: 'pino-pretty', options: { colorize: true } },
+      }),
+      redact,
+    });
   }
   // A label, not pino's number: it reads the same in a terminal and in Better Stack.
-  options.formatters = { level: (label) => ({ level: label }) };
+  options.formatters = { ...options.formatters, level: (label) => ({ level: label }) };
   const [onlyDestination, ...otherDestinations] = destinations;
   const hasOneDestination = onlyDestination !== undefined && otherDestinations.length === 0;
   if (hasOneDestination) {
-    return pino(options, onlyDestination);
+    return withRedactedChildBindings({ logger: pino(options, onlyDestination), redact });
   }
   // Every stream at the lowest level: the remote stream filters for itself, so a `ship: true`
   // info record can still reach Better Stack.
-  return pino(
+  const logger = pino(
     options,
     pino.multistream(destinations.map((stream) => ({ stream, level: 'trace' }))),
   );
+  return withRedactedChildBindings({ logger, redact });
+}
+
+/**
+ * pino gives a child's bindings no formatter of the parent's, so they are redacted on the way in.
+ * A child inherits the override from its parent, so a grandchild's bindings are redacted too.
+ */
+function withRedactedChildBindings({
+  logger,
+  redact,
+}: {
+  logger: Logger;
+  redact: (object: Record<string, unknown>) => Record<string, unknown>;
+}): Logger {
+  const createChild = logger.child;
+  logger.child = function childWithRedactedBindings<ChildCustomLevels extends string = never>(
+    this: Logger,
+    bindings: pino.Bindings,
+    options?: pino.ChildLoggerOptions<ChildCustomLevels>,
+  ): pino.Logger<ChildCustomLevels> {
+    const createRedactedChild = createChild.bind(this);
+    return createRedactedChild<ChildCustomLevels>(redact(bindings), options);
+  };
+  return logger;
 }
 
 /**
@@ -114,69 +129,4 @@ function loggedError(mergingObject: unknown): Error | null {
     return mergingObject.err;
   }
   return null;
-}
-
-/**
- * A copy of `context` with the logger's secret keys censored at the same depths, for a sink that
- * does not go through pino, such as a Sentry event.
- */
-export function redactSecrets({
-  context,
-  secretKeys = [],
-}: {
-  context: Record<string, unknown>;
-  secretKeys?: string[];
-}): Record<string, unknown> {
-  return redactEntries({ object: context, keys: new Set(allSecretKeys(secretKeys)), depth: 0 });
-}
-
-function allSecretKeys(secretKeys: string[]): string[] {
-  return [...DEFAULT_SECRET_KEYS, ...secretKeys];
-}
-
-function redactEntries({
-  object,
-  keys,
-  depth,
-}: {
-  object: object;
-  keys: Set<string>;
-  depth: number;
-}): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(object).map(([key, value]) => [
-      key,
-      keys.has(key) ? REDACTED : redactNested({ value, keys, depth: depth + 1 }),
-    ]),
-  );
-}
-
-function redactNested({
-  value,
-  keys,
-  depth,
-}: {
-  value: unknown;
-  keys: Set<string>;
-  depth: number;
-}): unknown {
-  if (depth >= REDACTION_DEPTH) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item: unknown) => redactNested({ value: item, keys, depth: depth + 1 }));
-  }
-  // A Date, Error or URL keeps its class, so Sentry still serializes it as one.
-  if (isPlainObject(value)) {
-    return redactEntries({ object: value, keys, depth });
-  }
-  return value;
-}
-
-function isPlainObject(value: unknown): value is object {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }

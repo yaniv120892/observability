@@ -1,6 +1,7 @@
 import pino from 'pino';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ALERTS_PER_HOUR, createInMemoryAlertCounter, OpsAlerter } from '../src/ops-alerter.js';
+import { PrismaClientKnownRequestError, WITHHELD_PRISMA_MESSAGE } from './fakes/prisma-error.js';
 import { createRecordingFetch, jsonBodyOf } from './fakes/recording-fetch.js';
 import type { RecordedRequest } from './fakes/recording-fetch.types.js';
 
@@ -15,7 +16,51 @@ function textOf(request: RecordedRequest | undefined): string {
   return String(body.text);
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('OpsAlerter', () => {
+  it('withholds a Prisma error message by default', async () => {
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const alerter = new OpsAlerter({
+      service: 'my-app',
+      telegram,
+      logger: silentLogger,
+      fetchImplementation,
+    });
+    await alerter.alert({
+      alertType: 'db',
+      title: 'Insert failed',
+      error: new PrismaClientKnownRequestError(),
+    });
+    expect(textOf(requests[0])).toBe(
+      `🚨 [my-app] Insert failed\nPrismaClientKnownRequestError: ${WITHHELD_PRISMA_MESSAGE}`,
+    );
+  });
+
+  it('counts in this instance when the shared counter does not answer within a second', async () => {
+    vi.useFakeTimers();
+    const { requests, fetchImplementation } = createRecordingFetch();
+    const warnings: unknown[] = [];
+    const logger = pino(
+      { level: 'warn' },
+      { write: (line: string) => warnings.push(JSON.parse(line).msg) },
+    );
+    const alerter = new OpsAlerter({
+      service: 'my-app',
+      telegram,
+      logger,
+      counter: () => new Promise<number>(() => undefined),
+      fetchImplementation,
+    });
+    const alerting = alerter.alert({ alertType: 'db', title: 'Database down' });
+    await vi.advanceTimersByTimeAsync(1000);
+    await alerting;
+    expect(requests).toHaveLength(1);
+    expect(warnings).toContain('ops_alert_counter_timed_out');
+  });
+
   it('is inert without Telegram credentials', async () => {
     const { requests, fetchImplementation } = createRecordingFetch();
     const alerter = new OpsAlerter({

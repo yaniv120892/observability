@@ -11,14 +11,14 @@ describe('loadObservabilityConfig', () => {
     expect(() => loadObservabilityConfig({ LOG_LEVEL: 'toString' })).toThrow(/LOG_LEVEL/);
   });
 
-  it('turns product analytics on with a PostHog key, in the EU region by default', () => {
+  it('turns product analytics on with a PostHog key, in the US region by default', () => {
     expect(loadObservabilityConfig({ NODE_ENV: 'production' }).productAnalytics).toBeNull();
     expect(
       loadObservabilityConfig({ NODE_ENV: 'production', POSTHOG_PROJECT_KEY: 'phc_x' })
         .productAnalytics,
     ).toEqual({
       projectKey: 'phc_x',
-      host: 'https://eu.i.posthog.com',
+      host: 'https://us.i.posthog.com',
     });
   });
 

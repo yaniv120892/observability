@@ -39,14 +39,20 @@ export type WaitUntil = (promise: Promise<unknown>) => void;
 type SharedNodeObservabilityOptions = {
   service: string;
   environment?: Record<string, string | undefined>;
+  /** Exact field names, in any case, to redact on top of the default secret-name patterns. */
   secretKeys?: string[];
+  /** Context keys whose string values become Sentry tags, on top of the defaults. */
+  sentryTagKeys?: string[];
   alertCounter?: AlertCounter;
   /**
    * Records below this level reach Better Stack only when marked `ship: true`. Defaults to `info`
    * for a long-running process and `warn` on serverless, where every invocation would ship.
    */
   shipLevel?: Level;
-  /** Rewrites error messages in logs, Sentry events and ops alerts; see `ErrorMessage`. */
+  /**
+   * Rewrites error messages in logs, Sentry events and ops alerts; see `ErrorMessage`. Defaults to
+   * `withholdPrismaMessages`; pass `rawMessage` to keep every message.
+   */
   errorMessage?: ErrorMessage;
   fetchImplementation?: typeof fetch;
 };

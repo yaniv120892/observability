@@ -1,4 +1,4 @@
-import { REDACTED, redactSecrets } from './logger.js';
+import { REDACTED, redactSecrets } from './redaction.js';
 import type {
   ErrorReportCaptureContext,
   SentryCaptureInput,
@@ -10,18 +10,40 @@ const MAX_TAG_KEY_LENGTH = 32;
 const MAX_TAG_VALUE_LENGTH = 200;
 
 /**
- * Every context value goes to `extra`; the primitive ones Sentry accepts as tags are also tags, so
- * an issue can be searched and grouped by them. Secrets are censored as the logger censors them
- * and never become tags, and `where` is set last so a context key cannot overwrite it.
+ * Context keys whose string values name a kind of thing rather than a person or a record, so they
+ * are safe to index and group by. Any other string stays in `extra`, which Sentry does not index.
+ */
+export const DEFAULT_SENTRY_TAG_KEYS = [
+  'method',
+  'route',
+  'routePath',
+  'routeType',
+  'status',
+  'statusCode',
+  'model',
+  'toolName',
+  'provider',
+  'operation',
+  'currency',
+  'locale',
+];
+
+/**
+ * Every context value goes to `extra`, censored as the logger censors it. A number or a boolean is
+ * also a tag, so an issue can be searched and grouped by it; a string is a tag only under an
+ * allow-listed key, since a tag is indexed and an id or an address there outlives the event.
+ * `where` is set last so a context key cannot overwrite it.
  */
 export function toSentryCaptureContext({
   where,
   context = {},
   secretKeys,
+  tagKeys = [],
 }: SentryCaptureInput): ErrorReportCaptureContext {
   const extra = redactSecrets({ context, secretKeys });
+  const allowedStringKeys = new Set([...DEFAULT_SENTRY_TAG_KEYS, ...tagKeys]);
   const tagEntries = Object.entries(extra).filter((entry): entry is [string, SentryTagValue] =>
-    isTag(entry),
+    isTag({ entry, allowedStringKeys }),
   );
   return { tags: { ...Object.fromEntries(tagEntries), where }, extra };
 }
@@ -35,7 +57,13 @@ export function captureQuietly(capture: () => void): void {
   }
 }
 
-function isTag([key, value]: [string, unknown]): boolean {
+function isTag({
+  entry: [key, value],
+  allowedStringKeys,
+}: {
+  entry: [string, unknown];
+  allowedStringKeys: Set<string>;
+}): boolean {
   if (key.length > MAX_TAG_KEY_LENGTH) {
     return false;
   }
@@ -44,7 +72,12 @@ function isTag([key, value]: [string, unknown]): boolean {
     case 'boolean':
       return true;
     case 'string':
-      return value !== REDACTED && value.length <= MAX_TAG_VALUE_LENGTH && !value.includes('\n');
+      return (
+        allowedStringKeys.has(key) &&
+        value !== REDACTED &&
+        value.length <= MAX_TAG_VALUE_LENGTH &&
+        !value.includes('\n')
+      );
     default:
       return false;
   }

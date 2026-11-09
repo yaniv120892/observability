@@ -4,7 +4,7 @@ The logging, error tracking, uptime and alerting that my apps share, so a new ap
 stack as My Expenses by importing it:
 
 - **Logs** — pino, JSON to stdout, and warn-and-above (plus any record marked `ship: true`) batched
-  to a Better Stack HTTP source. Secrets are redacted by field name.
+  to a Better Stack HTTP source. Secrets are redacted by field name, and contact details hashed.
 - **Errors** — Sentry, errors only, with request data collection pinned off and outgoing request
   breadcrumbs (`http`, `fetch`, `xhr`) cut to the URL's origin, method and status.
 - **Uptime** — Better Stack heartbeats, plus liveness and deep-health route handlers for monitors.
@@ -19,7 +19,7 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.2.0 pino
+npm install github:yaniv120892/observability#v0.3.0 pino
 ```
 
 A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
@@ -97,9 +97,21 @@ A request that logs a warning flushes its batch from `after`; an error ships at 
 hook keeps the function alive until it lands. A cron calls
 `await observability.pingHeartbeat('BETTERSTACK_HEARTBEAT_SYNC')` when it succeeds, and a path that
 catches an error and returns a fallback calls `observability.reportError({ error, where, context })`
-so Sentry still sees it. In both entries, `context` reaches Sentry as `extra`, and its string,
-number and boolean values also as tags, next to the `where` tag, with the logger's secret keys
-redacted the same way.
+so Sentry still sees it. In both entries, `context` reaches Sentry as `extra`, redacted as the
+logger redacts it. Its number and boolean values are also tags, next to the `where` tag, and so are
+its strings under the keys in `DEFAULT_SENTRY_TAG_KEYS` (`method`, `route`, `status`, `model` and a
+few more that name a kind of thing, not a person or a record). Pass `sentryTagKeys` to add keys; an
+id or an address stays out of tags, which Sentry indexes and keeps.
+
+## Redaction
+
+Every log line, and every `context` sent to Sentry, is walked three levels deep. A key is judged by
+its words, whatever its case or separators: one that names a token, secret, password,
+authorization, cookie, API key, private key, OTP, invite code or credential (`refreshToken`,
+`x-api-key`, `OTP_CODE`, `passwordHash`) is replaced by `[redacted]`, while `statusCode`,
+`tokenCount` and `secretName` are kept. An `email`, a `phone` (`userEmail`, `phoneNumber`) and a
+`to` become `sha256:` and 12 hex characters of the lower-cased value's hash, so one person's lines
+still correlate without the address in them. `secretKeys` adds exact names, matched in any case.
 
 Alerts are counted per serverless instance by default. An app with Redis caps them across
 instances by passing `alertCounter`:
@@ -194,20 +206,22 @@ The same checks are exported from the root entry as `checkLiveness` and `createD
 Some error messages quote the data that failed: a Prisma error quotes the query's arguments, and a
 failed check constraint quotes the whole row. `errorMessage` rewrites an error's message wherever
 the package sends it: the `err` field and the `msg` it lends a line, the stack and causes, every
-Sentry event's exception values and breadcrumbs, and ops alerts. It defaults to the message
-unchanged, and one that throws withholds the message outright.
+Sentry event's exception values and breadcrumbs, and ops alerts. It defaults to
+`withholdPrismaMessages`, which keeps a Prisma error's code and withholds its message and leaves
+every other message as it is; one that throws withholds the message outright. Pass `rawMessage` to
+keep every message, or a function of the app's own:
 
 ```ts
-import { createNodeObservability, withholdPrismaMessages } from '@yaniv120892/observability/node';
+import { createNodeObservability, rawMessage } from '@yaniv120892/observability/node';
 
-createNodeObservability({ service: 'my-worker', errorMessage: withholdPrismaMessages });
+createNodeObservability({ service: 'my-worker', errorMessage: rawMessage });
 ```
 
 The Node entry starts Sentry itself, so that covers every event. In a Next app,
 `createNextObservability({ service, errorMessage })` covers every server event sent once it has been
 created; `initSentry({ errorMessage })` covers the ones before that and the browser's. Both take the
-helper from `@yaniv120892/observability/next/sentry`, which keeps pino out of the client bundle.
-`createLogger` takes the same option. Only the message is rewritten: other fields of the error,
+helpers from `@yaniv120892/observability/next/sentry`, which keeps pino out of the client bundle.
+`createLogger` and `OpsAlerter` take the same option, with the same default. Only the message is rewritten: other fields of the error,
 such as Prisma's `meta`, are logged as they are.
 
 ## Product events
@@ -226,8 +240,8 @@ weekly report counts it as a visit, and leaves it out of the action counts and t
 actions. Events are sent from the server only, so there is no client script and no cookie. In Next
 they ship after the response; in a Node service, on the flush timer and on `shutdown()`, which also
 sends what requests still finishing capture during that last send.
-`POSTHOG_HOST` defaults to the EU region, `https://eu.i.posthog.com`; a project in the US region
-needs `https://us.i.posthog.com`, or its events are rejected.
+`POSTHOG_HOST` defaults to the US region, `https://us.i.posthog.com`; a project in the EU region
+needs `https://eu.i.posthog.com`, or its events are rejected.
 
 ### Weekly report
 
@@ -236,8 +250,8 @@ picture to Telegram, then a text message with the same numbers. Per app it shows
 users, visits and actions against the week before, and the top actions; the text adds the top users.
 If the picture cannot be drawn or sent, the text still goes out. A PostHog query that times out or hits a
 server error is tried up to three times before the run fails. It counts `production` events only. It needs the
-`POSTHOG_PROJECT_ID` repository variable (and `POSTHOG_API_HOST`, `https://us.posthog.com`, for a
-US-region project), a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
+`POSTHOG_PROJECT_ID` repository variable (and `POSTHOG_API_HOST`, `https://eu.posthog.com`, for an
+EU-region project; it defaults to `https://us.posthog.com`), a `POSTHOG_PERSONAL_API_KEY` secret (a personal key with
 only the `query:read` scope), and the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_ID` secrets.
 Run it now from the Actions tab with **Run workflow**. GitHub turns a schedule off after 60 days
 without a commit to the repository, so give it a Better Stack heartbeat with a period of a week and
@@ -247,6 +261,26 @@ alerts.
 Events are sent only from `production`, read from `VERCEL_ENV`, else `NODE_ENV`. A local run
 (`NODE_ENV=development`, even with production variables pulled), a Vercel preview and a service
 with neither variable set send nothing, so they spend no quota.
+
+## Upgrading to 0.3.0
+
+0.3.0 changes defaults that an app sees without touching its code:
+
+- **Prisma error messages are withheld by default** in logs, Sentry events (server and browser) and
+  ops alerts; only the error's code is kept. Pass `errorMessage: rawMessage` to
+  `createNextObservability`, `initSentry` or `createNodeObservability` to get them back.
+- **Redaction matches key patterns, not 11 exact names.** More keys are redacted (`x-api-key`,
+  `otpCode`, `inviteCode`, any `…Token`), in any case, child-logger bindings included, and `email`,
+  `phone` and `to` values are logged as a hash. A search for a raw address in the logs stops
+  matching; search for its hash instead.
+- **Sentry tags hold only numbers, booleans and allow-listed strings.** A string under any other
+  key, such as `userId` or `importId`, is in the event's extra data but no longer a tag, so an
+  issue search by that tag stops matching. Add the key to `sentryTagKeys` to keep it a tag.
+- **A log flush waits at most about 3 seconds** and sends only what was buffered when it started;
+  records written while it waits go with the next flush.
+- **A shared alert counter gets 1 second** to answer before the alert is counted in the instance.
+- **PostHog defaults to the US region**: an EU project must now set `POSTHOG_HOST` (events) and the
+  `POSTHOG_API_HOST` repository variable (weekly report).
 
 ## Release
 

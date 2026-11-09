@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createLogger, REDACTED } from '../src/logger.js';
+import { rawMessage } from '../src/error-message.js';
+import { createLogger } from '../src/logger.js';
+import { REDACTED } from '../src/redaction.js';
+import { PrismaClientKnownRequestError, WITHHELD_PRISMA_MESSAGE } from './fakes/prisma-error.js';
 
 function capture(secretKeys?: string[]) {
   const lines: Record<string, unknown>[] = [];
@@ -30,6 +33,63 @@ describe('createLogger', () => {
       nested: { authorization: REDACTED, deeper: { password: REDACTED } },
       setupCode: REDACTED,
     });
+  });
+
+  it('redacts secret keys by pattern, whatever their case or separators', () => {
+    const { logger, lines } = capture();
+    logger.warn(
+      {
+        refresh_token: 'a',
+        headers: { 'X-Api-Key': 'b', Cookie: 'c' },
+        member: { otpCode: '123456', inviteCode: 'd' },
+        statusCode: 401,
+        tokenCount: 12,
+      },
+      'upstream_refused',
+    );
+    expect(lines[0]).toMatchObject({
+      refresh_token: REDACTED,
+      headers: { 'X-Api-Key': REDACTED, Cookie: REDACTED },
+      member: { otpCode: REDACTED, inviteCode: REDACTED },
+      statusCode: 401,
+      tokenCount: 12,
+    });
+  });
+
+  it('logs a hash in place of an email, the same one for every line', () => {
+    const { logger, lines } = capture();
+    logger.info({ email: 'dana@example.com' }, 'signed_in');
+    logger.child({ to: 'dana@example.com' }).info('invite_sent');
+    expect(JSON.stringify(lines)).not.toContain('dana@example.com');
+    expect(lines[0]?.email).toMatch(/^sha256:[0-9a-f]{12}$/);
+    expect(lines[1]?.to).toBe(lines[0]?.email);
+  });
+
+  it("redacts a child logger's bindings", () => {
+    const { logger, lines } = capture();
+    logger.child({ sessionToken: 'a' }).info('request_started');
+    expect(lines[0]).toMatchObject({ sessionToken: REDACTED });
+  });
+
+  it('withholds a Prisma error message by default', () => {
+    const { logger, lines } = capture();
+    logger.error({ err: new PrismaClientKnownRequestError() }, 'insert_failed');
+    logger.error(new PrismaClientKnownRequestError());
+    expect(JSON.stringify(lines)).not.toContain('dana@example.com');
+    expect(lines[0]).toMatchObject({ err: { message: WITHHELD_PRISMA_MESSAGE } });
+    expect(lines[1]).toMatchObject({ msg: WITHHELD_PRISMA_MESSAGE });
+  });
+
+  it('keeps a Prisma error message when the app passes rawMessage', () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = createLogger({
+      service: 'my-app',
+      level: 'info',
+      errorMessage: rawMessage,
+      destinations: [{ write: (line: string) => lines.push(JSON.parse(line)) }],
+    });
+    logger.error({ err: new PrismaClientKnownRequestError() }, 'insert_failed');
+    expect(JSON.stringify(lines[0])).toContain('dana@example.com');
   });
 
   it('redacts a capitalised Authorization header', () => {

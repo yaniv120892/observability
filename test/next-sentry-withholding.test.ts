@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/nextjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { initSentry } from '../src/next/sentry.js';
+import { initSentry, rawMessage } from '../src/next/sentry.js';
+import { PrismaClientKnownRequestError, WITHHELD_PRISMA_MESSAGE } from './fakes/prisma-error.js';
 
 vi.mock('next/server.js', () => ({ after: () => undefined }));
 
@@ -35,6 +36,28 @@ beforeEach(() => {
 afterEach(async () => {
   vi.unstubAllEnvs();
   await Sentry.close();
+});
+
+describe('initSentry with the real Sentry SDK', () => {
+  function captureWithInitSentryOnly(options: Parameters<typeof initSentry>[0] = {}) {
+    initSentry(options);
+    Sentry.getClient()?.on('beforeSendEvent', (event) => {
+      sentEvents.push(event);
+    });
+    Sentry.captureException(new PrismaClientKnownRequestError());
+  }
+
+  it('withholds a Prisma error message by default', async () => {
+    captureWithInitSentryOnly();
+    await vi.waitFor(() => expect(sentEvents).toHaveLength(1));
+    expect(exceptionValues()).toEqual([[WITHHELD_PRISMA_MESSAGE]]);
+  });
+
+  it('keeps the message when the app passes rawMessage', async () => {
+    captureWithInitSentryOnly({ errorMessage: rawMessage });
+    await vi.waitFor(() => expect(sentEvents).toHaveLength(1));
+    expect(JSON.stringify(exceptionValues())).toContain('dana@example.com');
+  });
 });
 
 describe('createNextObservability with an errorMessage and the real Sentry SDK', () => {
