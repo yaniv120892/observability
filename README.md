@@ -151,8 +151,9 @@ at once when the buffer fills. Pass `shipLevel` to change where shipping starts.
 A function is frozen between invocations, so a timer never fires and a send nobody waits for is
 lost. `mode: 'serverless'` starts no timer and ships from `warn` up by default; the app awaits
 `flushRemoteLogs()` at the end of each invocation's work (it ships product events too), and `waitUntil` keeps the function alive
-for an error's immediate send and for the Sentry send of `reportError`. The `/node` entry loads
-through `require()` from a CommonJS build (Node 22.12 and later), and nothing in it needs `next`.
+for an error's immediate send and for the Sentry send of `reportError`. The package ships ESM only,
+but a CommonJS app can still `require()` the `/node` entry: Node 22.12 and later load ES modules
+through `require()`. Nothing in the entry needs `next`.
 
 ```ts
 import { waitUntil } from '@vercel/functions';
