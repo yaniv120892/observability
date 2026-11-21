@@ -152,8 +152,8 @@ A function is frozen between invocations, so a timer never fires and a send nobo
 lost. `mode: 'serverless'` starts no timer and ships from `warn` up by default; the app awaits
 `flushRemoteLogs()` at the end of each invocation's work (it ships product events too), and `waitUntil` keeps the function alive
 for an error's immediate send and for the Sentry send of `reportError`. The package ships ESM only,
-but a CommonJS app can still `require()` the `/node` entry: Node 22.12 and later load ES modules
-through `require()`. Nothing in the entry needs `next`.
+but a CommonJS app can still `require()` the `/node` entry: every supported Node version (26 and
+later) loads ES modules through `require()`. Nothing in the entry needs `next`.
 
 ```ts
 import { waitUntil } from '@vercel/functions';
@@ -291,6 +291,9 @@ with neither variable set send nothing, so they spend no quota.
 
 ## Release
 
-Bump `version` in the same PR as the change — Vercel caches a git dependency by version, so a
-same-version change never reaches a deployed app. After the squash-merge, tag the merge commit:
-`gh release create v<version> --generate-notes`.
+1. Bump `version` in `package.json` in the same PR as the change. Vercel caches a git dependency
+   by version, so a same-version change never reaches a deployed app.
+2. After the squash-merge, tag the merge commit:
+   `gh release create v<version> --target <full 40-char merge-commit SHA> --generate-notes`.
+   Without `--target`, the tag lands on whatever `main` points at, and a short SHA fails with 422.
+3. Consumers bump the tag in both `package.json` and their CI `uses:` line.
