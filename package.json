@@ -1,11 +1,11 @@
 {
   "name": "@yaniv120892/observability",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Logging (pino to Better Stack), Sentry, heartbeats, Telegram ops alerts and PostHog product events for my apps",
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=26"
   },
   "exports": {
     ".": {
@@ -66,8 +66,8 @@
     "@resvg/resvg-js": "^2.6.2",
     "@sentry/nextjs": "^11.9.0",
     "@sentry/node": "^11.9.0",
-    "@types/node": "^22.20.5",
-    "@yaniv120892/dev-config": "github:yaniv120892/dev-config#v0.1.8",
+    "@types/node": "^26.6.6",
+    "@yaniv120892/dev-config": "github:yaniv120892/dev-config#v0.2.0",
     "eslint": "^10.13.0",
     "eslint-config-next": "^16.4.3",
     "husky": "^9.1.7",

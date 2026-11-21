@@ -19,7 +19,7 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.3.0 pino
+npm install github:yaniv120892/observability#v0.4.0 pino
 ```
 
 A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
@@ -152,8 +152,8 @@ A function is frozen between invocations, so a timer never fires and a send nobo
 lost. `mode: 'serverless'` starts no timer and ships from `warn` up by default; the app awaits
 `flushRemoteLogs()` at the end of each invocation's work (it ships product events too), and `waitUntil` keeps the function alive
 for an error's immediate send and for the Sentry send of `reportError`. The package ships ESM only,
-but a CommonJS app can still `require()` the `/node` entry: Node 22.12 and later load ES modules
-through `require()`. Nothing in the entry needs `next`.
+but a CommonJS app can still `require()` the `/node` entry: every Node version the package's
+`engines` field allows loads ES modules through `require()`. Nothing in the entry needs `next`.
 
 ```ts
 import { waitUntil } from '@vercel/functions';
@@ -267,6 +267,12 @@ Events are sent only from `production`, read from `VERCEL_ENV`, else `NODE_ENV`.
 (`NODE_ENV=development`, even with production variables pulled), a Vercel preview and a service
 with neither variable set send nothing, so they spend no quota.
 
+## Upgrading to 0.4.0
+
+0.4.0 requires Node 26 or later (`engines.node` is `>=26`). Move the app, its CI and its Vercel
+project to Node 26 before bumping the tag. The API is unchanged. arbox-autobook still runs on Node 22
+(`engines` `>=22`, a `node:22-alpine` image), so it moves its runtime to 26 before it takes 0.4.0.
+
 ## Upgrading to 0.3.0
 
 0.3.0 changes defaults that an app sees without touching its code:
@@ -291,6 +297,9 @@ with neither variable set send nothing, so they spend no quota.
 
 ## Release
 
-Bump `version` in the same PR as the change — Vercel caches a git dependency by version, so a
-same-version change never reaches a deployed app. After the squash-merge, tag the merge commit:
-`gh release create v<version> --generate-notes`.
+1. Bump `version` in `package.json` in the same PR as the change. Vercel caches a git dependency
+   by version, so a same-version change never reaches a deployed app.
+2. After the squash-merge, tag the merge commit:
+   `gh release create v<version> --target <full 40-char merge-commit SHA> --generate-notes`.
+   Without `--target`, the tag lands on whatever `main` points at, and a short SHA fails with 422.
+3. Consumers bump the tag in both `package.json` and their CI `uses:` line.
