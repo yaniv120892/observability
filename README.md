@@ -302,4 +302,5 @@ project to Node 26 before bumping the tag. The API is unchanged. arbox-autobook 
 2. After the squash-merge, tag the merge commit:
    `gh release create v<version> --target <full 40-char merge-commit SHA> --generate-notes`.
    Without `--target`, the tag lands on whatever `main` points at, and a short SHA fails with 422.
-3. Consumers bump the tag in both `package.json` and their CI `uses:` line.
+3. Consumers bump the tag in `package.json`, and in their CI `uses:` line when they call a
+   reusable workflow from this repo.
