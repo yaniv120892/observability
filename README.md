@@ -19,7 +19,7 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.3.0 pino
+npm install github:yaniv120892/observability#v0.4.0 pino
 ```
 
 A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
@@ -266,6 +266,11 @@ alerts.
 Events are sent only from `production`, read from `VERCEL_ENV`, else `NODE_ENV`. A local run
 (`NODE_ENV=development`, even with production variables pulled), a Vercel preview and a service
 with neither variable set send nothing, so they spend no quota.
+
+## Upgrading to 0.4.0
+
+0.4.0 requires Node 26 or later (`engines.node` is `>=26`). Move the app, its CI and its Vercel
+project to Node 26 before bumping the tag. The API is unchanged.
 
 ## Upgrading to 0.3.0
 
