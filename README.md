@@ -152,8 +152,8 @@ A function is frozen between invocations, so a timer never fires and a send nobo
 lost. `mode: 'serverless'` starts no timer and ships from `warn` up by default; the app awaits
 `flushRemoteLogs()` at the end of each invocation's work (it ships product events too), and `waitUntil` keeps the function alive
 for an error's immediate send and for the Sentry send of `reportError`. The package ships ESM only,
-but a CommonJS app can still `require()` the `/node` entry: every supported Node version (26 and
-later) loads ES modules through `require()`. Nothing in the entry needs `next`.
+but a CommonJS app can still `require()` the `/node` entry: every Node version the package's
+`engines` field allows loads ES modules through `require()`. Nothing in the entry needs `next`.
 
 ```ts
 import { waitUntil } from '@vercel/functions';
@@ -270,7 +270,8 @@ with neither variable set send nothing, so they spend no quota.
 ## Upgrading to 0.4.0
 
 0.4.0 requires Node 26 or later (`engines.node` is `>=26`). Move the app, its CI and its Vercel
-project to Node 26 before bumping the tag. The API is unchanged.
+project to Node 26 before bumping the tag. The API is unchanged. arbox-autobook still runs on Node 22
+(`engines` `>=22`, a `node:22-alpine` image), so it moves its runtime to 26 before it takes 0.4.0.
 
 ## Upgrading to 0.3.0
 
