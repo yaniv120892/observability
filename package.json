@@ -1,6 +1,6 @@
 {
   "name": "@yaniv120892/observability",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Logging (pino to Better Stack), Sentry, heartbeats, Telegram ops alerts and PostHog product events for my apps",
   "license": "MIT",
   "type": "module",
@@ -81,5 +81,8 @@
     "typescript": "~6.0.3",
     "vitest": "^5.0.5"
   },
-  "prettier": "@yaniv120892/dev-config/prettier"
+  "prettier": "@yaniv120892/dev-config/prettier",
+  "dependencies": {
+    "@vercel/functions": "^3.12.0"
+  }
 }

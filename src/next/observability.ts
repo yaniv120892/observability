@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
+import { waitUntil } from '@vercel/functions';
 import { after } from 'next/server.js';
 import { loadObservabilityConfig } from '../config.js';
 import { withholdingEventProcessor, withholdPrismaMessages } from '../error-message.js';
@@ -206,7 +207,8 @@ function runAfterResponse(task: () => Promise<void>): void {
   try {
     after(task);
   } catch {
-    // Outside a request scope (start-up, a script) nothing would run the hook.
-    void task();
+    // Outside a request scope, such as `register` at boot, no hook runs. The platform's
+    // `waitUntil` keeps the invocation alive for the send instead; where none is offered it only runs it.
+    waitUntil(task());
   }
 }
