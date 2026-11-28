@@ -209,6 +209,14 @@ function runAfterResponse(task: () => Promise<void>): void {
   } catch {
     // Outside a request scope, such as `register` at boot, no hook runs. The platform's
     // `waitUntil` keeps the invocation alive for the send instead; where none is offered it only runs it.
-    waitUntil(task());
+    keepAlive(task());
+  }
+}
+
+function keepAlive(work: Promise<void>): void {
+  try {
+    waitUntil(work);
+  } catch {
+    // The work has already started; only the invocation is not extended for it.
   }
 }

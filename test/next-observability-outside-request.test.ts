@@ -94,6 +94,22 @@ describe('createNextObservability outside a request scope', () => {
     await vi.waitFor(() => expect(shippedMessages()).toEqual(['sentry_errors_not_configured']));
   });
 
+  it('neither throws nor drops a boot warning when the platform refuses to extend the invocation', async () => {
+    const context: VercelRequestContext = {
+      get: () => ({
+        waitUntil: () => {
+          throw new Error('no invocation to extend');
+        },
+      }),
+    };
+    Reflect.set(globalThis, VERCEL_REQUEST_CONTEXT, context);
+    const { logger } = freshObservability();
+
+    expect(() => logger.warn('sentry_errors_not_configured')).not.toThrow();
+
+    await vi.waitFor(() => expect(shippedMessages()).toEqual(['sentry_errors_not_configured']));
+  });
+
   it('keeps nothing alive for a record it does not ship', () => {
     installVercelRequestContext();
     const { logger } = freshObservability();

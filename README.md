@@ -22,7 +22,8 @@ reports on.
 npm install github:yaniv120892/observability#v0.4.1 pino
 ```
 
-A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
+A Next.js app also installs `@sentry/nextjs` and `@vercel/functions`, which the `/next` entry
+imports, and `pino-pretty`
 for readable dev logs; a Node service installs `@sentry/node` if it reports to Sentry.
 
 ## Environment
