@@ -1,6 +1,6 @@
 {
   "name": "@yaniv120892/observability",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Logging (pino to Better Stack), Sentry, heartbeats, Telegram ops alerts and PostHog product events for my apps",
   "license": "MIT",
   "type": "module",
@@ -44,6 +44,7 @@
   "peerDependencies": {
     "@sentry/nextjs": "^11.0.0",
     "@sentry/node": "^11.0.0",
+    "@vercel/functions": "^3.0.0",
     "next": ">=16.0.0",
     "pino": "^10.0.0",
     "pino-pretty": "^13.0.0"
@@ -53,6 +54,9 @@
       "optional": true
     },
     "@sentry/node": {
+      "optional": true
+    },
+    "@vercel/functions": {
       "optional": true
     },
     "next": {
@@ -67,6 +71,7 @@
     "@sentry/nextjs": "^11.9.0",
     "@sentry/node": "^11.9.0",
     "@types/node": "^26.6.6",
+    "@vercel/functions": "^3.12.0",
     "@yaniv120892/dev-config": "github:yaniv120892/dev-config#v0.2.0",
     "eslint": "^10.13.0",
     "eslint-config-next": "^16.4.3",

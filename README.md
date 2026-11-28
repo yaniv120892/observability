@@ -19,11 +19,12 @@ reports on.
 ## Install
 
 ```bash
-npm install github:yaniv120892/observability#v0.4.0 pino
+npm install github:yaniv120892/observability#v0.4.1 pino
 ```
 
-A Next.js app also installs `@sentry/nextjs`, which the `/next` entry imports, and `pino-pretty`
-for readable dev logs; a Node service installs `@sentry/node` if it reports to Sentry.
+A Next.js app also installs `@sentry/nextjs` and `@vercel/functions`, which the `/next` entry
+imports, and `pino-pretty` for readable dev logs; a Node service installs `@sentry/node` if it
+reports to Sentry.
 
 ## Environment
 
@@ -94,7 +95,9 @@ export const GET = observability.createDeepHealthRoute({
 ```
 
 A request that logs a warning flushes its batch from `after`; an error ships at once, and the same
-hook keeps the function alive until it lands. A cron calls
+hook keeps the function alive until it lands. A line logged outside a request, such as a boot
+warning from `register`, has no `after`: its send goes to `waitUntil` from `@vercel/functions`, so
+the function is not frozen before it lands. A cron calls
 `await observability.pingHeartbeat('BETTERSTACK_HEARTBEAT_SYNC')` when it succeeds, and a path that
 catches an error and returns a fallback calls `observability.reportError({ error, where, context })`
 so Sentry still sees it. In both entries, `context` reaches Sentry as `extra`, redacted as the
